@@ -11,9 +11,9 @@ if [[ ! -d "${AGENT_DIR}/.git" ]]; then
   git clone "${XRCE_AGENT_REPO}" "${AGENT_DIR}"
 fi
 
-git -C "${AGENT_DIR}" fetch origin
-git -C "${AGENT_DIR}" checkout "${XRCE_AGENT_REF}"
-git -C "${AGENT_DIR}" pull --ff-only
+git -C "${AGENT_DIR}" fetch origin || warn "Agent fetch 失败，使用现有 checkout"
+git -C "${AGENT_DIR}" checkout "${XRCE_AGENT_REF}" || warn "Agent checkout ${XRCE_AGENT_REF} 失败"
+git -C "${AGENT_DIR}" pull --ff-only || warn "Agent pull 失败，继续使用当前版本"
 
 log "安装编译依赖"
 sudo apt-get install -y cmake build-essential libssl-dev libasio-dev

@@ -30,11 +30,15 @@ if [[ "${WORKSPACE_ROOT}" != "${PROJECT_ROOT}" ]]; then
   )
 fi
 
-log "colcon build（并行度 ${JOBS_N}）"
+# 只构建本项目需要的包及其依赖，避免把 ros_gz 的 demo 包全部编译一遍。
+PACKAGES="${PACKAGES:-px4_msgs flight_ui flight_perception ros_gz_bridge}"
+log "colcon build（并行度 ${JOBS_N}，包：${PACKAGES}）"
+# shellcheck disable=SC2086
 colcon build \
   --symlink-install \
   --parallel-workers "${JOBS_N}" \
   "${COLCON_EXTRA[@]}" \
+  --packages-up-to ${PACKAGES} \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
 
 log "完成。source install/setup.bash 后即可使用 px4_msgs / ros_gz。"

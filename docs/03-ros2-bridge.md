@@ -77,7 +77,7 @@ ros2 topic list | grep fmu
 /fmu/out/distance_sensor
 /fmu/out/vehicle_local_position
 /fmu/out/vehicle_optical_flow
-/fmu/out/vehicle_status
+/fmu/out/vehicle_status_v1
 ```
 
 ### 看消息类型
@@ -95,11 +95,15 @@ Type: px4_msgs/msg/ManualControlSetpoint
 ```
 
 > 注意：v1.16 用的是 `ManualControlSetpoint`（字段 `roll/pitch/yaw/throttle`），不是旧版的 `ManualControl`（`x/y/z/r`）。
+>
+> 话题名可能带消息版本后缀：`VehicleStatus` 的 `MESSAGE_VERSION=1`，所以实际话题是 `/fmu/out/vehicle_status_v1`。写订阅代码时要么用带后缀的名字，要么两个都订阅。
+>
+> `vehicle_optical_flow` 和 `distance_sensor` 默认不在 uXRCE 的转发列表里。本项目在 `px4_overlay/px4_patches/dds_topics.yaml` 中补上了这两项，并重新编译 PX4。
 
 ### 读一条消息
 
 ```bash
-ros2 topic echo /fmu/out/vehicle_status --once
+ros2 topic echo /fmu/out/vehicle_status_v1 --once
 ros2 topic echo /fmu/out/vehicle_optical_flow --once
 ros2 topic echo /fmu/out/distance_sensor --once
 ```
@@ -107,7 +111,7 @@ ros2 topic echo /fmu/out/distance_sensor --once
 如果 `echo` 没数据，试：
 
 ```bash
-ros2 topic echo /fmu/out/vehicle_status --once --qos-reliability best_effort
+ros2 topic echo /fmu/out/vehicle_status_v1 --once --qos-reliability best_effort
 ```
 
 ### 看频率

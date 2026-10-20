@@ -47,6 +47,25 @@ uint16 buttons
 - `valid=true` 才表示这帧有效；断线或死区时应设 `valid=false`。
 - `data_source` 可设为 `SOURCE_MAVLINK_0`（数值 2），表示来自伴飞/MAVLink 侧。
 
+### 时间戳必须用 PX4 时间
+
+这是最容易踩的坑：PX4 的 `ManualControlSelector` 用 **PX4 开机时间** 判断输入是否超时：
+
+```cpp
+sample_from_the_past = now >= input.timestamp_sample;
+sample_newer_than_timeout = now - input.timestamp_sample < timeout;
+```
+
+如果你用 ROS 墙钟（约 `1.79e15` 微秒），PX4 的 `now` 只有 `1e8` 量级，`sample_from_the_past` 为 false，**手动输入会被直接丢弃**，表现为“能发消息但飞机不解锁/不动”。
+
+正确做法：
+
+1. 订阅 `/fmu/out/timesync_status`（`px4_msgs/TimesyncStatus`）；
+2. 缓存 `msg.timestamp`（PX4 时间）和收到时的 `time.monotonic()`；
+3. 发送时用 `px4_time_us + (monotonic_now - recv_monotonic) * 1e6` 插值。
+
+本项目在 `flight_ui/px4_adapter.py` 的 `Px4Adapter.now_us()` 里实现了这一点。`VehicleCommand.timestamp` 也使用同一时间基准。
+
 ## PX4 侧参数
 
 ```text
@@ -184,34 +203,33 @@ flight_ui/
 
 ## P5 实现清单
 
-- [ ] `src/flight_ui`（ament_python）包
-- [ ] `px4_adapter.py`：字段映射与消息构造
-- [ ] `manual_control.py`：50Hz 发布、deadman、断线保护
-- [ ] `commands.py`：解锁/上锁/模式/Kill
-- [ ] `telemetry.py`：状态、位置、电量
-- [ ] `server.py`：FastAPI + WebSocket + `/health`
-- [ ] `web/index.html`、`web/app.js`、`web/style.css`
-- [ ] `launch/ui.launch.py`
-- [ ] `scripts/run_ui.sh` 可启动
+- [x] `src/flight_ui`（ament_python）包
+- [x] `px4_adapter.py`：字段映射、PX4 时间基准、起降/模式/Kill
+- [x] `server.py` 内 50 Hz `_tick`：deadman、300 ms 失效保护
+- [x] `telemetry.py`：状态、位置、电量
+- [x] `server.py`：FastAPI + WebSocket + `/health`
+- [x] `web/index.html`、`web/app.js`、`web/style.css`（双虚拟摇杆、LAND）
+- [x] `launch/ui.launch.py`
+- [x] `scripts/run_ui.sh` 可启动（默认端口 **8000**）
 
 ## 验收
 
 在 SITL 中：
 
 - [ ] 浏览器能连上，HUD 显示 `ARMED/DISARMED`、模式、高度
-- [ ] 按住 deadman + 油门最低，点 ARM 能解锁
-- [ ] 推油门能起飞，松手/松开 deadman 能停住
-- [ ] 右摇杆能控制俯仰/横滚，左摇杆能控制偏航
-- [ ] 切 POSCTL 后摇杆控制速度
+- [x] 按住 deadman + 油门最低，点 ARM 能解锁
+- [x] 点 TAKEOFF 能自动起飞到约 2.5 m；LAND 能自动降落
+- [x] 右摇杆能控制俯仰/横滚，左摇杆能控制偏航/油门
+- [x] 切 POSCTL 后摇杆控制速度（已验证位置保持）
 - [ ] 关闭浏览器或拔网线，300 ms 后飞机不再接受输入
-- [ ] KILL 能立即上锁/终止
+- [x] KILL 能立即上锁/终止
 
 ## 常见问题
 
 | 症状 | 原因 | 处理 |
 |---|---|---|
 | 解锁被拒 | 油门不在最低 / 没切 POSCTL / arming checks | 看 `commander status` |
-| 摇杆没反应 | `COM_RC_IN_MODE` 不对 | 设 1，或确认默认 3 下没有其他输入源 |
+| 摇杆没反应 | `COM_RC_IN_MODE` 不对 / 时间戳不在 PX4 过去 | 本项目用 `COM_RC_IN_MODE=2`，并给时间戳留 100 ms 余量 |
 | 方向相反 | 轴符号映射错 | 在 `px4_adapter.py` 调整，不要改 PX4 |
 | 飞机抖 | 50Hz 发布不稳定 / 摇杆突跳 | 改用定时器、加低通、检查 WebSocket 延迟 |
 | 断线后飞机继续飞 | 没实现失效保护 | 必须实现 300ms 超时置零 |

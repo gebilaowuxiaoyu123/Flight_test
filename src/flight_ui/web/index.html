@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>PX4 Web RC</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header id="hud">
+    <span class="pill" id="conn">未连接</span>
+    <span class="pill" id="armed">DISARMED</span>
+    <span>模式 <b id="mode">--</b></span>
+    <span>高度 <b id="alt">0.0</b> m</span>
+    <span>电量 <b id="bat">--</b>%</span>
+  </header>
+
+  <main>
+    <section class="stick-box">
+      <div class="stick" id="left"><div class="knob"></div></div>
+      <div class="label">左：油门（上下） / 偏航（左右）</div>
+    </section>
+    <section class="stick-box">
+      <div class="stick" id="right"><div class="knob"></div></div>
+      <div class="label">右：俯仰（上下） / 横滚（左右）</div>
+    </section>
+  </main>
+
+  <footer>
+    <button id="deadman" class="deadman">按住使能</button>
+    <button id="arm">ARM</button>
+    <button id="disarm">DISARM</button>
+    <button id="posctl">POSCTL</button>
+    <button id="takeoff">TAKEOFF</button>
+    <button id="land">LAND</button>
+    <button id="kill" class="kill">KILL</button>
+  </footer>
+
+  <div id="log"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

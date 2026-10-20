@@ -67,7 +67,7 @@ gz topic -l | grep -i depth
 ```text
 /depth_camera
 /depth_camera/points
-/depth_camera/camera_info
+/camera_info
 ```
 
 名字以实际输出为准；下面的桥接命令要按实际名字改。
@@ -103,7 +103,7 @@ source install/setup.bash
 ros2 run ros_gz_bridge parameter_bridge \
   /depth_camera@sensor_msgs/msg/Image@gz.msgs.Image \
   /depth_camera/points@sensor_msgs/msg/PointCloud2@gz.msgs.PointCloudPacked \
-  /depth_camera/camera_info@sensor_msgs/msg/CameraInfo@gz.msgs.CameraInfo
+  /camera_info@sensor_msgs/msg/CameraInfo@gz.msgs.CameraInfo
 ```
 
 检查：
@@ -141,7 +141,7 @@ sudo apt install -y ros-humble-depthimage-to-laserscan
 ros2 run depthimage_to_laserscan depthimage_to_laserscan_node \
   --ros-args \
   -r image:=/depth_camera \
-  -r camera_info:=/depth_camera/camera_info \
+  -r camera_info:=/camera_info \
   -r scan:=/scan
 ```
 

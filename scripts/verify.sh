@@ -79,7 +79,7 @@ if [[ -f "${ROS_SETUP}" && -f "${WORKSPACE_ROOT}/install/setup.bash" ]]; then
             timeout 5 ros2 topic list 2>/dev/null)"
 fi
 
-if [[ -n "${TOPICS}" ]] && grep -qx '/fmu/out/vehicle_status' <<<"${TOPICS}"; then
+if [[ -n "${TOPICS}" ]] && grep -qxE '/fmu/out/vehicle_status(_v[0-9]+)?' <<<"${TOPICS}"; then
   pass "PX4 遥测话题在线（/fmu/out/vehicle_status）"
 else
   skip "未检测到 PX4 遥测话题（SITL 未运行或 uXRCE 未连接）"
@@ -89,6 +89,24 @@ if [[ -n "${TOPICS}" ]] && grep -qx '/fmu/out/vehicle_optical_flow' <<<"${TOPICS
   pass "光流话题在线（/fmu/out/vehicle_optical_flow）"
 else
   skip "未检测到光流话题（运行 gz_x500_flow 后再试）"
+fi
+
+if [[ -n "${TOPICS}" ]] && grep -qx '/fmu/out/distance_sensor' <<<"${TOPICS}"; then
+  pass "测距话题在线（/fmu/out/distance_sensor）"
+else
+  skip "未检测到测距话题（检查 4021 机架与 LW20）"
+fi
+
+if [[ -n "${TOPICS}" ]] && grep -qx '/depth_camera' <<<"${TOPICS}"; then
+  pass "ROS 深度图在线（/depth_camera）"
+else
+  skip "未检测到 ROS 深度图（检查 ros_gz_bridge）"
+fi
+
+if [[ -n "${TOPICS}" ]] && grep -qx '/obstacle_distance' <<<"${TOPICS}"; then
+  pass "障碍距离在线（/obstacle_distance）"
+else
+  skip "未检测到 /obstacle_distance（检查 min_depth 节点）"
 fi
 
 GZ_TOPICS="$(timeout 5 gz topic -l 2>/dev/null)"

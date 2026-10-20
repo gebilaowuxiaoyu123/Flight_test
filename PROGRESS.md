@@ -1,72 +1,89 @@
 # 项目进度
 
-当前阶段：**P1 进行中**（PX4 已克隆，等待 sudo 安装 Gazebo 与系统依赖）
-最后更新：2026-10-21 02:15
+当前阶段：**P1–P6 已完成并跑通**（光流 + 深度 + Web 遥控器同机联调）
+最后更新：2026-10-21 03:45
 
 ## 断点续做（断线后从这里开始）
 
-1. 运行 `./scripts/verify.sh`，确认哪些组件已就绪。
-2. 打开 [docs/README.md](docs/README.md)，查看各章状态。
-3. 从下面的“下一步”继续；不要跳章，后一章默认依赖前一章的验收项。
-4. 每完成一步，更新本文件的勾选与“下一步”。
+1. 打开终端，运行 `./scripts/verify.sh`；`[FAIL]` 必须为 0，`[SKIP]` 表示对应服务未启动。
+2. 启动完整仿真（4 个进程，建议用 tmux）：
+
+```bash
+# 1) PX4 + Gazebo（自定义 x500_flow_depth + flow 世界）
+HEADLESS=1 ./scripts/run_sitl_combined.sh
+
+# 2) uXRCE-DDS Agent
+MicroXRCEAgent udp4 -p 8888
+
+# 3) ROS 2 工作区
+source /opt/ros/humble/setup.bash && source install/setup.bash
+
+# 4) 深度桥 + 障碍距离 + Web UI
+ros2 run ros_gz_bridge parameter_bridge \
+  /depth_camera@sensor_msgs/msg/Image@gz.msgs.Image \
+  /depth_camera/points@sensor_msgs/msg/PointCloud2@gz.msgs.PointCloudPacked \
+  /camera_info@sensor_msgs/msg/CameraInfo@gz.msgs.CameraInfo
+ros2 run flight_perception min_depth --ros-args -p image_topic:=/depth_camera
+ros2 run flight_ui ui_server            # http://127.0.0.1:8000/
+```
+
+3. 浏览器打开 `http://127.0.0.1:8000/`，按住“按住使能”，油门在最低，点 `TAKEOFF`；`LAND` 降落，`KILL` 紧急停。
+4. 若要从头安装，按 [docs/01-environment.md](docs/01-environment.md) → [docs/02-px4-sitl.md](docs/02-px4-sitl.md) 顺序做。
 
 ## 里程碑
 
-- [x] **P0** 仓库脚手架、`versions.env`、`verify.sh`、教材骨架、git 初始化
-- [ ] **P1** 安装 Gazebo Harmonic + PX4 v1.16.2，跑通 `gz_x500_flow`（进行中）
-- [ ] **P2** ROS 2 桥：uXRCE-DDS + `px4_msgs`，看到 `/fmu/out/*`
-- [ ] **P3** 光流实验：无 GPS 悬停，记录/对比光流数据
-- [ ] **P4** 深度相机：`x500_depth` + `ros_gz` + RViz2 / 障碍距离
-- [ ] **P5** Web 遥控器：双摇杆 + 解锁/模式/Kill + 遥测
-- [ ] **P6** 合并模型 `x500_flow_depth`，光流与深度同机联调
-- [ ] **P7** 升级演练：Humble→Jazzy / PX4 新版本 / 可选 Docker
+- [x] **P0** 仓库脚手架、`versions.env`、`verify.sh`、教材、git
+- [x] **P1** Gazebo Harmonic 8.15.0 + PX4 v1.16.2，`gz_x500_flow` 光流 quality 255
+- [x] **P2** uXRCE-DDS + px4_msgs，`/fmu/out/*` 在线
+- [x] **P3** 光流实验：无 GPS 悬停，CSV 记录 flow/quality/距离/EKF 速度
+- [x] **P4** 深度相机：`x500_depth` + `ros_gz` + `min_depth` → `/obstacle_distance`
+- [x] **P5** Web 遥控器：双虚拟摇杆、deadman、ARM/DISARM/POSCTL/TAKEOFF/LAND/KILL
+- [x] **P6** 合并模型 `x500_flow_depth`，光流 + 深度 + 测距同机
+- [ ] **P7** 升级演练（Humble→Jazzy / 新 PX4 / Docker）：见 [docs/08-upgrade.md](docs/08-upgrade.md)
 
-## P1 详细状态
+## 已验收结果（2026-10-21）
 
-- [x] `PX4-Autopilot` 克隆到 `v1.16.2`（含 SITL 所需子模块）
-- [x] `Tools/simulation/gz/models/x500_flow` 存在
-- [x] `src/modules/mavlink/mavlink`、`uxrce_dds_client`、`gps/devices`、`libevents`、`crypto` 已初始化
-- [x] `src/px4_msgs`（`release/1.16`）
-- [x] `src/ros_gz`（`humble`）
-- [ ] Gazebo Harmonic（`gz-harmonic`）
-- [ ] GStreamer / protobuf / Java 等系统依赖
-- [ ] PX4 Python 依赖（`jinja2`、`empy`、`kconfiglib`）
-- [ ] `gz_x500_flow` 编译
-- [ ] SITL 首次启动与光流数据
+| 项目 | 结果 |
+|---|---|
+| Gazebo | Harmonic 8.15.0，`gz sim` 正常 |
+| PX4 | v1.16.2，SITL 自定义模型 `x500_flow_depth_0` |
+| 光流 | `/fmu/out/vehicle_optical_flow` ~50 Hz，quality 最高 255 |
+| 测距 | `/fmu/out/distance_sensor` orientation=25，随高度变化 |
+| 深度 | `/depth_camera` 640×480 32FC1，约 15 Hz；`/obstacle_distance` 3.86 m（前方 4 m 墙） |
+| Web UI | `:8000/health` 正常；ARM、AUTO_TAKEOFF 到 2.5 m、LAND 均验证 |
+| 光流 CSV | `/tmp/optical_flow.csv`，含 flow/quality/distance/EKF 速度 |
 
-## 下一步（需要你执行的 sudo 步骤）
+## 关键启动参数
 
-```bash
-cd ~/flight_project
-./scripts/install_deps.sh
+`scripts/run_sitl_combined.sh` 已经写入以下参数，重启后仍然生效：
+
+```text
+PX4_SIM_MODEL=gz_x500_flow_depth
+PX4_SYS_AUTOSTART=4021
+PX4_GZ_WORLD=flow
+PX4_PARAM_NAV_DLL_ACT=0
+PX4_PARAM_NAV_RCL_ACT=0
+PX4_PARAM_COM_RC_IN_MODE=2
+PX4_PARAM_CBRK_SUPPLY_CHK=894281
+PX4_PARAM_CBRK_USB_CHK=197848
+PX4_PARAM_CBRK_IO_SAFETY=22027
+PX4_PARAM_EKF2_HGT_REF=0
+PX4_PARAM_EKF2_BARO_CTRL=1
+PX4_PARAM_EKF2_RNG_CTRL=1
+PX4_PARAM_SIM_BAT_DRAIN=3600
+PX4_PARAM_COM_LOW_BAT_ACT=0
+PX4_PARAM_BAT_LOW_THR=0.05
+PX4_PARAM_COM_DISARM_LAND=0
+PX4_PARAM_COM_DISARM_PRFLT=0
 ```
 
-> 不要直接用 `PX4-Autopilot/Tools/setup/ubuntu.sh`：系统的 `llvm-apt` 源缺 GPG key，
-> 会让它在第一步 `apt-get update` 就退出。`install_deps.sh` 会容忍这个无关错误。
-> 彻底修复见 [docs/09-troubleshooting.md](docs/09-troubleshooting.md)。
+> `COM_DISARM_LAND=0` 是为了方便演示（降落后不会 2 秒自动上锁）。
+> 真实飞行应改回 `2`，并保留手动 DISARM。
 
-完成后：
+## 已知限制 / 下一步
 
-```bash
-./scripts/verify.sh
-./scripts/build_px4.sh gz_x500_flow
-HEADLESS=1 ./scripts/run_sitl_flow.sh
-```
-
-验收：Gazebo 出现 x500_flow，PX4 终端 `listener vehicle_optical_flow` 有数据。
-
-## 已知约束
-
-- `sudo` 需要密码，安装脚本会提示输入。
-- 当前没有 swap；编译并行度默认 8，避免 OOM。
-- 根分区约 29 GB 可用；不要把数据集/录包放进项目。
-- 后续扩容后，可通过 `WORKSPACE_ROOT` 把 `PX4-Autopilot/`、`build/`、`install/` 迁到大盘。
-
-## 决策记录
-
-| 日期 | 决策 | 原因 |
-|---|---|---|
-| 2026-10-21 | 选 PX4 v1.16.2 + Gazebo Harmonic | v1.16 起有 `gz_x500_flow`，Harmonic 是 LTS；v1.15 仍是 EOL 的 Garden |
-| 2026-10-21 | 不直接改 PX4 源码，用 `px4_overlay/` | 便于升级 PX4 |
-| 2026-10-21 | 业务代码与 `px4_msgs` 解耦到 adapter | 消息字段变化时只改一处 |
-| 2026-10-21 | Web 遥控器用 WebSocket + FastAPI | 浏览器/手机可用，控制链路可控 |
+- 4021 没有 GPS/磁罗盘，yaw 会缓慢漂移；适合室内光流实验，不适合长航时。
+- 光流水平定位依赖下视激光的 `distance_m`；若升级 PX4 后 `distance_m` 又变成 `NaN`，
+  按 [docs/07-integration.md](docs/07-integration.md) 第 4 节检查 gz_bridge 的 orientation 判断。
+- `build_ros.sh` 目前仍会构建 `src/` 下所有包，建议改为选择性构建（见脚本注释）。
+- 清理：`/dev/shm/.flight_askpass` 是临时 sudo askpass，交付前删除；`/tmp/*.log` 可删。

@@ -1,0 +1,122 @@
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #0d1117;
+  color: #e6edf3;
+  font-family: system-ui, -apple-system, "Noto Sans CJK SC", sans-serif;
+  touch-action: none;
+  user-select: none;
+}
+
+#hud {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 10px 16px;
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  font-size: 15px;
+}
+#hud b { color: #58a6ff; }
+
+.pill {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #30363d;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+.pill.ok { background: #1f6f43; }
+.pill.bad { background: #8b1e1e; }
+
+main {
+  display: flex;
+  justify-content: space-evenly;
+  align-items: center;
+  height: calc(100vh - 150px);
+  gap: 20px;
+  padding: 10px;
+}
+
+.stick-box { text-align: center; }
+
+.stick {
+  width: min(38vw, 300px);
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  position: relative;
+  background: radial-gradient(circle at 50% 50%, #21262d 0 58%, #161b22 59% 100%);
+  border: 2px solid #30363d;
+  box-shadow: inset 0 0 30px #0008;
+  touch-action: none;
+}
+
+.stick::before, .stick::after {
+  content: "";
+  position: absolute;
+  background: #30363d;
+}
+.stick::before { left: 50%; top: 8%; width: 1px; height: 84%; }
+.stick::after { top: 50%; left: 8%; height: 1px; width: 84%; }
+
+.knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 26%;
+  aspect-ratio: 1 / 1;
+  margin-left: -13%;
+  margin-top: -13%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #79c0ff, #1f6feb 55%, #0b3d91);
+  border: 2px solid #9ecbff;
+  box-shadow: 0 0 18px #1f6feb88;
+  pointer-events: none;
+}
+
+.label { margin-top: 10px; color: #8b949e; font-size: 13px; }
+
+footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  padding: 8px 12px 14px;
+}
+
+button {
+  min-width: 88px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  border: 1px solid #30363d;
+  background: #21262d;
+  color: #e6edf3;
+  font-size: 15px;
+  font-weight: 700;
+  touch-action: none;
+}
+button:active { transform: scale(0.97); }
+button.deadman { min-width: 140px; }
+button.deadman.active { background: #1f6f43; border-color: #3fb950; }
+button.kill { background: #8b1e1e; border-color: #f85149; }
+
+#log {
+  position: fixed;
+  right: 10px;
+  bottom: 6px;
+  max-width: 46vw;
+  color: #8b949e;
+  font-size: 12px;
+  text-align: right;
+  pointer-events: none;
+}
+
+@media (max-width: 700px) {
+  #hud { font-size: 12px; gap: 8px; padding: 6px 8px; }
+  .stick { width: 40vw; }
+  button { min-width: 64px; padding: 12px 10px; font-size: 13px; }
+  main { height: calc(100vh - 170px); }
+}

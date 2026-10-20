@@ -17,7 +17,7 @@
 | [01-environment.md](01-environment.md) | Gazebo / PX4 / ROS 2 / Agent 安装 | ✅ 已完成 |
 | [02-px4-sitl.md](02-px4-sitl.md) | 首次 SITL、PX4 shell、光流机型 | ✅ 已完成 |
 | [03-ros2-bridge.md](03-ros2-bridge.md) | uXRCE-DDS、px4_msgs、话题 | ✅ 已完成 |
-| [04-rc-ui.md](04-rc-ui.md) | 遥控器原理与 Web UI 设计 | 🟡 设计与接口已完成，实现随 P5 补充 |
+| [04-rc-ui.md](04-rc-ui.md) | 遥控器原理与 Web UI 实现 | ✅ 已完成 |
 | [05-optical-flow.md](05-optical-flow.md) | 光流原理、EKF2、实验 | ✅ 原理与步骤已完成 |
 | [06-depth-camera.md](06-depth-camera.md) | 深度相机、ros_gz、点云/避障 | ✅ 原理与步骤已完成 |
 | [07-integration.md](07-integration.md) | 光流 + 深度合并模型 | ✅ 步骤已完成 |

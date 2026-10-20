@@ -289,3 +289,66 @@ df -h
 ```
 
 把输出和 `PROGRESS.md` 的“当前卡点”一起记录，下一次就能从断点继续。
+
+## 本项目实测坑（2026-10-21）
+
+### 1. 解锁被拒：No connection to the ground control station
+
+PX4 的 `NAV_DLL_ACT` 默认是 2，SITL 没有 GCS 时会拒绝解锁。
+`scripts/run_sitl_combined.sh` 已通过 `PX4_PARAM_NAV_DLL_ACT=0` 等环境变量在启动时设置。
+也可以在 `pxh>` 里临时执行：
+
+```text
+param set NAV_DLL_ACT 0
+param set CBRK_SUPPLY_CHK 894281
+param set CBRK_USB_CHK 197848
+param set CBRK_IO_SAFETY 22027
+```
+
+注意：用 MAVLink shell 改的参数带 `*`，重启后会丢；脚本里的 `PX4_PARAM_*` 才是可复现的。
+
+### 2. `AUTO_TAKEOFF` 飞得很高 / 进入 blind land
+
+两个独立原因：
+
+1. `EKF2_HGT_REF=1`（GPS）但 4021 关闭了 GPS，EKF 没有高度参考 → 切换为
+   `EKF2_HGT_REF=0`（baro），并保留 `EKF2_BARO_CTRL=1`；
+2. 下视激光被 gz_bridge 标成 `ROTATION_CUSTOM(100)`，光流模块只接受
+   `ROTATION_DOWNWARD_FACING(25)`，导致 `vehicle_optical_flow.distance_m=NaN`，
+   EKF 无法用光流做水平定位 → 修正 GZBridge 的下视判断并重编 PX4。
+
+验收：
+
+```bash
+ros2 topic echo /fmu/out/distance_sensor --once --qos-reliability best_effort | grep orientation
+# 必须是 25
+ros2 topic echo /fmu/out/vehicle_optical_flow --once --qos-reliability best_effort | grep distance_m
+# 不能是 .nan
+```
+
+### 3. 深度相机有话题但没有图像
+
+`<include merge="true">` 合并 OakD-Lite 时，`camera_link` 可能没有进入最终模型。
+用 `gz model -m x500_flow_depth_0 -l | grep camera_link` 确认；
+本项目改为把 OakD-Lite 的 link 和两个 sensor **直接内联**到合并模型。
+另外 `/camera_info` 不是 `/depth_camera/camera_info`。
+
+### 4. Web UI 端口与 QoS
+
+- `ui_server` 默认监听 **8000**，不是 8080；
+- 传感器话题是 best-effort，`ros2 topic echo --once` 要加
+  `--qos-reliability best_effort`，`ros2 topic hz` 不支持这个参数。
+
+### 5. 多个浏览器/客户端抢摇杆
+
+`RosWorker` 的摇杆状态是全局的；同时开两个页面时，后到的消息会覆盖先到的。
+调试时先关掉多余页面，或只保留一个控制器。
+
+### 6. VS Code 崩溃（V8 OOM）
+
+PX4 编译输出被完整读成 1 GB 字符串会导致渲染进程 OOM。
+所有长命令都重定向到 `/tmp/*.log`，只回读 tail；`argv.json` 里可加：
+
+```json
+"js-flags": "--max-old-space-size=8192"
+```

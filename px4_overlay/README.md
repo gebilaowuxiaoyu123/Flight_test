@@ -58,3 +58,24 @@ make px4_sitl gz_x500_flow
 - 每个自定义文件都要能从 overlay 重建；
 - 模型里的传感器安装位置、`EKF2_OF_POS_*`、`SENS_FLOW_ROT` 要一致；
 - 改动后跑 `./scripts/verify.sh`。
+
+## PX4 补丁（升级后需要重放）
+
+| 文件 | 作用 |
+|---|---|
+| `px4_patches/dds_topics.yaml` | 把 `vehicle_optical_flow`、`distance_sensor` 加入 uXRCE 转发列表 |
+| `px4_patches/gz_bridge_downward_lidar.patch` | 让 +90° pitch 的下视激光被标记为 `ROTATION_DOWNWARD_FACING`，否则光流 `distance_m` 为 NaN |
+
+重放 dds_topics.yaml：
+
+```bash
+cp px4_overlay/px4_patches/dds_topics.yaml \
+   PX4-Autopilot/src/modules/uxrce_dds_client/dds_topics.yaml
+```
+
+重放补丁并重编：
+
+```bash
+git -C PX4-Autopilot apply px4_overlay/px4_patches/gz_bridge_downward_lidar.patch
+cmake --build PX4-Autopilot/build/px4_sitl_default --target px4 -- -j8
+```

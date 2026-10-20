@@ -53,7 +53,7 @@
 ### 2. 遥测流（飞机 → 人）
 
 ```
-PX4 → /fmu/out/vehicle_status
+PX4 → /fmu/out/vehicle_status_v1
     → /fmu/out/vehicle_local_position
     → /fmu/out/battery_status
     → flight_ui → WebSocket → 浏览器 HUD

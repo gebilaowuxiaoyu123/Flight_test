@@ -1,0 +1,19 @@
+diff --git a/src/modules/simulation/gz_bridge/GZBridge.cpp b/src/modules/simulation/gz_bridge/GZBridge.cpp
+index 3042edc8ff..8eafc9adc7 100644
+--- a/src/modules/simulation/gz_bridge/GZBridge.cpp
++++ b/src/modules/simulation/gz_bridge/GZBridge.cpp
+@@ -678,11 +678,13 @@ void GZBridge::laserScantoLidarSensorCallback(const gz::msgs::LaserScan &msg)
+ 	const gz::math::Quaterniond q_front(0.7071068, 0.7071068, 0, 0);
+ 
+ 	const gz::math::Quaterniond q_down(0, 1, 0, 0);
++	// A lidar whose +X ray points down has a +90 deg pitch (y=sin(45), w=cos(45)).
++	const gz::math::Quaterniond q_down_pitch(0.7071068, 0, 0.7071068, 0);
+ 
+ 	if (q_sensor.Equal(q_front, 0.03)) {
+ 		report.orientation = distance_sensor_s::ROTATION_FORWARD_FACING;
+ 
+-	} else if (q_sensor.Equal(q_down, 0.03)) {
++	} else if (q_sensor.Equal(q_down, 0.03) || q_sensor.Equal(q_down_pitch, 0.03)) {
+ 		report.orientation = distance_sensor_s::ROTATION_DOWNWARD_FACING;
+ 
+ 	} else if (q_sensor.Equal(q_left, 0.03)) {
