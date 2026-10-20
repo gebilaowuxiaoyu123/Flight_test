@@ -1,7 +1,7 @@
 # 项目进度
 
-当前阶段：**P0 完成**
-最后更新：2026-10-21
+当前阶段：**P1 进行中**（PX4 已克隆，等待 sudo 安装 Gazebo 与系统依赖）
+最后更新：2026-10-21 02:15
 
 ## 断点续做（断线后从这里开始）
 
@@ -13,7 +13,7 @@
 ## 里程碑
 
 - [x] **P0** 仓库脚手架、`versions.env`、`verify.sh`、教材骨架、git 初始化
-- [ ] **P1** 安装 Gazebo Harmonic + PX4 v1.16.2，跑通 `gz_x500_flow`
+- [ ] **P1** 安装 Gazebo Harmonic + PX4 v1.16.2，跑通 `gz_x500_flow`（进行中）
 - [ ] **P2** ROS 2 桥：uXRCE-DDS + `px4_msgs`，看到 `/fmu/out/*`
 - [ ] **P3** 光流实验：无 GPS 悬停，记录/对比光流数据
 - [ ] **P4** 深度相机：`x500_depth` + `ros_gz` + RViz2 / 障碍距离
@@ -21,15 +21,32 @@
 - [ ] **P6** 合并模型 `x500_flow_depth`，光流与深度同机联调
 - [ ] **P7** 升级演练：Humble→Jazzy / PX4 新版本 / 可选 Docker
 
-## 下一步
+## P1 详细状态
 
-**P1：环境安装**
+- [x] `PX4-Autopilot` 克隆到 `v1.16.2`（含 SITL 所需子模块）
+- [x] `Tools/simulation/gz/models/x500_flow` 存在
+- [x] `src/modules/mavlink/mavlink`、`uxrce_dds_client`、`gps/devices`、`libevents`、`crypto` 已初始化
+- [x] `src/px4_msgs`（`release/1.16`）
+- [x] `src/ros_gz`（`humble`）
+- [ ] Gazebo Harmonic（`gz-harmonic`）
+- [ ] GStreamer / protobuf / Java 等系统依赖
+- [ ] PX4 Python 依赖（`jinja2`、`empy`、`kconfiglib`）
+- [ ] `gz_x500_flow` 编译
+- [ ] SITL 首次启动与光流数据
+
+## 下一步（需要你执行的 sudo 步骤）
 
 ```bash
-./scripts/install_gazebo.sh
-./scripts/install_px4.sh
+cd ~/flight_project
+bash PX4-Autopilot/Tools/setup/ubuntu.sh --no-nuttx
+```
+
+完成后：
+
+```bash
+./scripts/verify.sh
 ./scripts/build_px4.sh gz_x500_flow
-./scripts/run_sitl_flow.sh
+HEADLESS=1 ./scripts/run_sitl_flow.sh
 ```
 
 验收：Gazebo 出现 x500_flow，PX4 终端 `listener vehicle_optical_flow` 有数据。
