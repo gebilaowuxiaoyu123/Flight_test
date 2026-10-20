@@ -40,4 +40,4 @@ if curl -fsS --max-time 3 http://127.0.0.1:8000/health >/dev/null; then
 else
   warn "Web UI 还没就绪，查看 /tmp/flight_ui.log"
 fi
-log "停止全部：tmux kill-session -t agent;sitl;bridge;depth;flowlog;ui"
+log "停止全部：for s in agent sitl bridge depth flowlog ui; do tmux kill-session -t \"$s\"; done"
