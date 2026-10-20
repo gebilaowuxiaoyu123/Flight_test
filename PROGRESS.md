@@ -6,7 +6,8 @@
 ## 断点续做（断线后从这里开始）
 
 1. 打开终端，运行 `./scripts/verify.sh`；`[FAIL]` 必须为 0，`[SKIP]` 表示对应服务未启动。
-2. 启动完整仿真（4 个进程，建议用 tmux）：
+2. 一键启动：`./scripts/run_demo.sh`（tmux 会话：agent/sitl/bridge/depth/flowlog/ui）。
+3. 手动启动完整仿真（4 个进程，建议用 tmux）：
 
 ```bash
 # 1) PX4 + Gazebo（自定义 x500_flow_depth + flow 世界）
@@ -27,8 +28,8 @@ ros2 run flight_perception min_depth --ros-args -p image_topic:=/depth_camera
 ros2 run flight_ui ui_server            # http://127.0.0.1:8000/
 ```
 
-3. 浏览器打开 `http://127.0.0.1:8000/`，按住“按住使能”，油门在最低，点 `TAKEOFF`；`LAND` 降落，`KILL` 紧急停。
-4. 若要从头安装，按 [docs/01-environment.md](docs/01-environment.md) → [docs/02-px4-sitl.md](docs/02-px4-sitl.md) 顺序做。
+4. 浏览器打开 `http://127.0.0.1:8000/`，按住“按住使能”，油门在最低，点 `TAKEOFF`；`LAND` 降落，`KILL` 紧急停。
+5. 若要从头安装，按 [docs/01-environment.md](docs/01-environment.md) → [docs/02-px4-sitl.md](docs/02-px4-sitl.md) 顺序做。
 
 ## 里程碑
 

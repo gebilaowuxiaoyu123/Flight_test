@@ -70,3 +70,19 @@ flight_project/
 | 现在 | 22.04 + Humble + PX4 v1.16.2 + Harmonic |
 | 扩容后 | 24.04 + Jazzy + PX4 v1.17/1.18 + Harmonic（`ros_gz` 可用二进制） |
 | 更远 | Gazebo Jetty + ROS 2 Kilted/Rolling |
+
+## 一键启动完整演示
+
+```bash
+./scripts/run_demo.sh
+# 浏览器打开 http://127.0.0.1:8000/
+```
+
+脚本用 tmux 启动 Agent、PX4/Gazebo、深度桥、障碍距离、光流日志和 Web 遥控器；
+重复运行会跳过已存在的会话。停止：
+
+```bash
+for s in agent sitl bridge depth flowlog ui; do tmux kill-session -t "$s" 2>/dev/null || true; done
+```
+
+操作顺序：按住“按住使能” → 油门在最低 → `TAKEOFF`；`LAND` 降落；`KILL` 紧急停。
