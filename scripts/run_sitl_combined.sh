@@ -22,6 +22,9 @@ GZ_BRIDGE_DIR="${PX4_DIR}/build/px4_sitl_default/src/modules/simulation/gz_bridg
 # PX4 的 px4-rc.gzsim 用 ${PX4_GZ_MODELS}/<model>/model.sdf 生成 spawn 请求，
 # 所以 overlay 模型必须出现在 PX4 自己的模型目录中（软链即可）。
 ln -sfn "${MODEL_DIR}" "${PX4_DIR}/Tools/simulation/gz/models/${MODEL}"
+# flow 世界（棋盘格 + 深度墙）也放进 PX4 的 world 搜索路径。
+ln -sfn "${PROJECT_ROOT}/px4_overlay/worlds/flow.sdf" \
+  "${PX4_DIR}/Tools/simulation/gz/worlds/flow.sdf"
 
 export PX4_SIM_MODEL="gz_${MODEL}"
 export PX4_SYS_AUTOSTART="${PX4_SYS_AUTOSTART:-4021}"
