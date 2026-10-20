@@ -46,6 +46,40 @@ sudo mkswap /swapfile
 sudo swapon /swapfile
 ```
 
+### `apt-get update` 因 `llvm-apt` 缺 key 失败
+
+症状：
+
+```text
+W: GPG 错误：https://mirrors.tuna.tsinghua.edu.cn/llvm-apt/jammy ...
+   NO_PUBKEY 15CF4D18AF4F7421
+E: 仓库 ... 没有数字签名。
+```
+
+`apt-get update` 返回 100，PX4 的 `ubuntu.sh`（`set -e`）会直接退出，后面的 Gazebo/PX4 依赖一个都不会装。
+
+**快速绕过（临时禁用这个无关源）**：
+
+```bash
+sudo mv /etc/apt/sources.list.d/llvm-apt.list{,.disabled}
+# 跑安装
+sudo mv /etc/apt/sources.list.d/llvm-apt.list{.disabled,}
+```
+
+**彻底修复（补上 LLVM 的 key）**：
+
+```bash
+curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+  | sudo gpg --dearmor -o /usr/share/keyrings/llvm-snapshot.gpg
+sudo sed -i '1s#^deb #deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg] #' \
+  /etc/apt/sources.list.d/llvm-apt.list
+sudo apt-get update
+```
+
+key 指纹应为 `6084F3CF814B57C1CF12EFD515CF4D18AF4F7421`（短 ID `15CF4D18AF4F7421`）。
+
+> 这是系统里原本就存在的问题，不是本项目引入的。项目脚本 `install_deps.sh` 会容忍它继续安装，但建议你有空时彻底修掉。
+
 ### `ubuntu.sh` 又装了一遍 Gazebo
 
 正常。它按 Ubuntu 版本安装 `gz-harmonic`，不会移除现有的 Harmonic 数据。

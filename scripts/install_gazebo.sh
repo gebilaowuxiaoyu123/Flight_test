@@ -12,7 +12,9 @@ if command -v gz >/dev/null 2>&1 && gz sim --version 2>/dev/null | grep -q 'vers
 fi
 
 log "添加 OSRF Gazebo 软件源（$(lsb_release -cs)）"
-sudo apt-get update
+if ! sudo apt-get update; then
+  warn "apt-get update 返回非 0（可能有无关源缺 key），继续安装。"
+fi
 sudo apt-get install -y curl gnupg lsb-release
 sudo install -d -m 0755 /usr/share/keyrings
 curl -fsSL https://packages.osrfoundation.org/gazebo.gpg \
@@ -21,7 +23,9 @@ curl -fsSL https://packages.osrfoundation.org/gazebo.gpg \
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" \
   | sudo tee /etc/apt/sources.list.d/gazebo-stable.list >/dev/null
 
-sudo apt-get update
+if ! sudo apt-get update; then
+  warn "apt-get update 返回非 0（可能有无关源缺 key），继续安装。"
+fi
 log "安装 ${GZ_PKG} 与 libunwind-dev"
 sudo apt-get install -y "${GZ_PKG}" libunwind-dev
 

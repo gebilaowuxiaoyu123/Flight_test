@@ -26,7 +26,7 @@ ROS 2 + PX4（四旋翼）+ Gazebo Harmonic 的仿真、遥控器界面与感知
 # 2. 安装 Gazebo Harmonic（需要 sudo）
 ./scripts/install_gazebo.sh
 
-# 3. 克隆并安装 PX4 v1.16.2（需要 sudo）
+# 3. 克隆并安装 PX4 v1.16.2 + 依赖（容错版，需要 sudo）
 ./scripts/install_px4.sh
 
 # 4. 首次编译并启动光流机型

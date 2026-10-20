@@ -17,11 +17,8 @@ else
   git -C "${PX4_DIR}" submodule update --init --recursive
 fi
 
-log "安装 PX4 依赖（会要求 sudo 密码；跳过 NuttX 工具链）"
-(
-  cd "${PX4_DIR}"
-  bash Tools/setup/ubuntu.sh --no-nuttx
-)
+log "安装 PX4 依赖（容错版：跳过 NuttX/Java，忽略无关 apt 源错误）"
+bash "${PROJECT_ROOT}/scripts/install_deps.sh"
 
 log "完成。首次编译："
 log "  ./scripts/build_px4.sh gz_x500_flow"

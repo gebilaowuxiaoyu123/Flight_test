@@ -38,8 +38,12 @@
 
 ```bash
 cd ~/flight_project
-bash PX4-Autopilot/Tools/setup/ubuntu.sh --no-nuttx
+./scripts/install_deps.sh
 ```
+
+> 不要直接用 `PX4-Autopilot/Tools/setup/ubuntu.sh`：系统的 `llvm-apt` 源缺 GPG key，
+> 会让它在第一步 `apt-get update` 就退出。`install_deps.sh` 会容忍这个无关错误。
+> 彻底修复见 [docs/09-troubleshooting.md](docs/09-troubleshooting.md)。
 
 完成后：
 

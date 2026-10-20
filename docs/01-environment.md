@@ -81,12 +81,16 @@ Gazebo Sim, version 8.x.x
 脚本会：
 
 1. `git clone --recursive -b v1.16.2`
-2. 执行 `Tools/setup/ubuntu.sh --no-nuttx`
+2. 调用 `scripts/install_deps.sh` 安装依赖
 3. 不编译（编译在下一章）
 
-`--no-nuttx` 跳过 ARM 工具链；我们只跑 SITL，不需要烧录飞控。
+`install_deps.sh` 是 PX4 自带 `ubuntu.sh` 的**容错版**：
 
-> `ubuntu.sh` 会再次安装 `gz-harmonic`，这是正常的；它不会移除 Harmonic。
+- 跳过 NuttX、Java、jMAVSim（SITL 不需要）
+- `apt-get update` 因**无关源**失败时继续安装
+- 仍然安装 Gazebo Harmonic、GStreamer、protobuf 和 PX4 Python 依赖
+
+> 如果你更想用上游脚本 `Tools/setup/ubuntu.sh --no-nuttx`，需要先处理系统的 LLVM 源缺 key 问题，否则它在第一步 `apt-get update` 就会退出。见 [09-troubleshooting.md](09-troubleshooting.md#apt-get-update-因-llvm-apt-缺-key-失败)。
 
 ### 检查版本
 
