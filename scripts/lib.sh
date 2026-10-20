@@ -24,16 +24,29 @@ require_cmd() {
 ros_setup() {
   local setup="/opt/ros/${ROS_DISTRO}/setup.bash"
   [[ -f "${setup}" ]] || die "找不到 ${setup}，请先安装 ROS 2 ${ROS_DISTRO}"
+
+  # ROS 的 setup.bash 会引用未定义变量（如 AMENT_TRACE_SETUP_FILES），
+  # 在 set -u 下会直接退出；source 期间临时关闭 nounset。
+  local restore_u=0
+  if [[ $- == *u* ]]; then restore_u=1; fi
+  set +u
   # shellcheck disable=SC1090
   source "${setup}"
+  if [[ "${restore_u}" -eq 1 ]]; then set -u; fi
+  return 0
 }
 
 workspace_setup() {
   local setup="${WORKSPACE_ROOT}/install/setup.bash"
   if [[ -f "${setup}" ]]; then
+    local restore_u=0
+    if [[ $- == *u* ]]; then restore_u=1; fi
+    set +u
     # shellcheck disable=SC1090
     source "${setup}"
+    if [[ "${restore_u}" -eq 1 ]]; then set -u; fi
   fi
+  return 0
 }
 
 jobs_count() {

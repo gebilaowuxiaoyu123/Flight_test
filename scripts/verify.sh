@@ -61,7 +61,7 @@ else
 fi
 
 if [[ -f "${WORKSPACE_ROOT}/install/setup.bash" ]]; then
-  if (source "${ROS_SETUP}"; source "${WORKSPACE_ROOT}/install/setup.bash"; \
+  if (set +u; source "${ROS_SETUP}"; source "${WORKSPACE_ROOT}/install/setup.bash"; \
       ros2 pkg prefix px4_msgs >/dev/null 2>&1); then
     pass "ROS 工作区可用（px4_msgs）"
   else
@@ -75,7 +75,7 @@ echo
 echo "== 运行时链路 =="
 TOPICS=""
 if [[ -f "${ROS_SETUP}" && -f "${WORKSPACE_ROOT}/install/setup.bash" ]]; then
-  TOPICS="$(source "${ROS_SETUP}"; source "${WORKSPACE_ROOT}/install/setup.bash"; \
+  TOPICS="$(set +u; source "${ROS_SETUP}"; source "${WORKSPACE_ROOT}/install/setup.bash"; \
             timeout 5 ros2 topic list 2>/dev/null)"
 fi
 
