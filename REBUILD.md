@@ -120,8 +120,21 @@ HEADLESS=0 ./scripts/run_sitl_combined.sh
 已经在跑无头仿真时，也可以只起一个 GUI 客户端连上去：
 
 ```bash
-gz sim -g
+gz sim -g          # 只开界面，连现有仿真（Ctrl-C 关闭界面，不影响仿真）
 ```
+
+> **关于 `MESA: warning: Driver does not support the 0x7d67 PCI ID`**：
+> 本机是 RTX 5070（新卡），Mesa 的 EGL 设备加载器还不认识这个 PCI ID，会打印这条 warning。
+> 实测它**不影响仿真**：实时率约 0.8，IMU/光流/深度都正常。
+> 想确认到底有没有落到软件渲染，看这里：
+>
+> ```bash
+> glxinfo -B | grep -E 'OpenGL renderer|OpenGL version'
+> # 期望：OpenGL renderer string: NVIDIA GeForce RTX 5070 Laptop GPU/PCIe/SSE2
+> # 如果显示 llvmpipe / softpipe，才是真的软件渲染
+> ```
+>
+> 只是跑数据/做实验的话，`HEADLESS=1` 完全够用，也最稳。
 
 ---
 
@@ -354,6 +367,7 @@ python3 scripts/ws_smoke_test.py    # 全 PASS
 ## 四、我踩过的坑（现象 → 根因 → 修复）
 
 这一节是**整份文档最值钱的部分**，以后遇到同样的报错直接对号入座。
+（编号 4.1～4.11，用 `Ctrl-F` 搜报错关键字更快。）
 
 ### 4.1 冷启动后 `ekf2 missing data`，IMU 只传了一帧
 
@@ -481,7 +495,25 @@ systemd-inhibit --what=idle:sleep:handle-lid-switch --why="sim" sleep infinity
 2. 4021 机架没有 GPS，PX4 在默认 `AUTO_LOITER` 下做位置检查会失败 → 解锁前先切到不依赖 GPS 的模式；
 3. `NAV_TAKEOFF.param7` 是 **AMSL 绝对高度**，不是离地高度 → 用 `ref_alt - z + 目标高度` 换算。
 
-### 4.10 其他零碎
+### 4.10 有第二个 Gazebo 实例在跑
+
+**现象**：`gz model --list` 里出现莫名其妙的世界/模型，或者 `gz topic -l` 里有重复话题。
+
+**根因**：有人（或上一次调试）在别处又起了一个 `gz sim`。Gazebo 默认共用同一个
+transport 分区，第二个实例会和我们的仿真混在一起，`gz_bridge` 可能订阅到错的那个。
+
+**处理**：
+
+```bash
+ps -eo pid,cmd | grep 'gz sim' | grep -v grep
+# 只应有一条：... --verbose=1 -r -s .../worlds/flow.sdf
+# 多余的（尤其 cwd 不在本项目里的）直接 kill 掉
+```
+
+**永远不要**在这个项目之外随手 `gz sim` 或 `gz sim -g` 起新仿真；
+只想看画面就用 `gz sim -g`（只开界面，连现有仿真，不新建 server）。
+
+### 4.11 其他零碎
 
 | 现象 | 说明 |
 |---|---|
@@ -492,6 +524,7 @@ systemd-inhibit --what=idle:sleep:handle-lid-switch --why="sim" sleep infinity
 | 落地 2 秒后自动上锁 | `COM_DISARM_LAND` 默认 2；演示里设成 0 方便观察，**真机要改回 2** |
 | `colcon` 报 email 非法 | `package.xml` 的 `<maintainer email>` 必须是合法邮箱 |
 | 缺 `actuator_msgs/gps_msgs/vision_msgs` | `sudo apt install ros-humble-{actuator,gps,vision}-msgs` |
+| `MESA: warning: Driver does not support the 0x7d67 PCI ID` | Mesa 不认识这块新卡，属良性 warning；用 `glxinfo -B` 确认渲染器仍是 NVIDIA（见 1.5） |
 
 ---
 
