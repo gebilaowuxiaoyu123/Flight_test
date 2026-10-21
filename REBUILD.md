@@ -725,3 +725,4 @@ flight_project/
 | 看光流 | `ros2 topic echo /fmu/out/vehicle_optical_flow --once --qos-reliability best_effort` |
 | 起不来 | `tail -60 /tmp/flight_sitl.log` |
 | 重新编译 | `./scripts/build_px4.sh gz_x500_flow > /tmp/b.log 2>&1` |
+| 换成 C++ 写法 | 看 [docs/11-cpp-rewrite.md](docs/11-cpp-rewrite.md) |

@@ -90,3 +90,21 @@ PX4_PARAM_COM_DISARM_PRFLT=0
   按 [docs/07-integration.md](docs/07-integration.md) 第 4 节检查 gz_bridge 的 orientation 判断。
 - `build_ros.sh` 目前仍会构建 `src/` 下所有包，建议改为选择性构建（见脚本注释）。
 - 清理：`/dev/shm/.flight_askpass` 是临时 sudo askpass，交付前删除；`/tmp/*.log` 可删。
+
+## C++ 版本（参考实现）
+
+| 包 | 内容 | 状态 |
+|---|---|---|
+| `src/flight_ui_cpp` | rclcpp + Boost.Beast + jsoncpp 的 Web 遥控器 | 编译通过，`ws_smoke_test.py` 6 PASS |
+| `src/flight_perception_cpp` | C++ 版 `min_depth` / `optical_flow_logger` | 编译通过，`/obstacle_distance` 有数据 |
+
+操作步骤与踩坑记录见 [docs/11-cpp-rewrite.md](docs/11-cpp-rewrite.md)。
+这两个包**不在** `build_ros.sh` 的默认构建列表里，不影响现有 Python 链路。
+
+```bash
+# 单独编译并对比
+colcon build --packages-select flight_ui_cpp flight_perception_cpp \
+  --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+ros2 run flight_ui_cpp rc_server          # 占用 8000，先停掉 python 版 ui
+python3 scripts/ws_smoke_test.py          # 同一套黑盒验收
+```

@@ -76,6 +76,12 @@ flight_project/
 **如果你要自己从零重装、或者我不在场时需要排查问题，先看 [REBUILD.md](REBUILD.md)。**
 里面有：一条命令启动、每个阶段的命令与验收、我踩过的 10 个坑、故障决策树、速查表。
 
+## 想换成 C++？
+
+看 [docs/11-cpp-rewrite.md](docs/11-cpp-rewrite.md)：从"怎么读这个仓库"讲到
+每一步写什么代码、怎么验证、我踩过哪些坑。`src/flight_ui_cpp/` 与
+`src/flight_perception_cpp/` 是配套的参考实现（已编译、已通过同一套端到端验收）。
+
 ## 一键启动完整演示
 
 ```bash
