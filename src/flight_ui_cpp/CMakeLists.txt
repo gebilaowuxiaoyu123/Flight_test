@@ -1,54 +1,39 @@
 cmake_minimum_required(VERSION 3.8)
-project(flight_ui_cpp CXX)
-
-if(NOT CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 17)
-  set(CMAKE_CXX_STANDARD_REQUIRED ON)
-endif()
+project(flight_ui_cpp)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+# find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
-find_package(ament_index_cpp REQUIRED)
-# Boost.Beast 是 header-only，但需要 Boost.System
-find_package(Boost REQUIRED COMPONENTS system thread)
-find_package(jsoncpp REQUIRED)
 
-# ---------------------------------------------------------------- 核心库
-add_library(flight_ui_cpp_core
-  src/px4_adapter.cpp
-  src/telemetry.cpp
-  src/rc_service.cpp
-  src/web_server.cpp
-)
-target_include_directories(flight_ui_cpp_core PUBLIC
+add_executable(rc_server src/rc_server.cpp)
+target_include_directories(rc_server PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
+  $<INSTALL_INTERFACE:include>)
+target_compile_features(rc_server PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
+ament_target_dependencies(
+  rc_server
+  "rclcpp"
+  "px4_msgs"
 )
-ament_target_dependencies(flight_ui_cpp_core rclcpp px4_msgs)
-# ament_target_dependencies 用的是 plain 签名，这里也必须用 plain
-# （CMake 不允许同一 target 混用 plain 和 keyword 签名）
-target_include_directories(flight_ui_cpp_core SYSTEM PUBLIC ${Boost_INCLUDE_DIRS})
-target_link_libraries(flight_ui_cpp_core ${Boost_LIBRARIES} JsonCpp::JsonCpp)
 
-# ---------------------------------------------------------------- 可执行
-add_executable(rc_server src/rc_server_main.cpp)
-ament_target_dependencies(rc_server ament_index_cpp rclcpp)
-target_include_directories(rc_server SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
-target_link_libraries(rc_server flight_ui_cpp_core ${Boost_LIBRARIES} JsonCpp::JsonCpp)
+install(TARGETS rc_server
+  DESTINATION lib/${PROJECT_NAME})
 
-install(TARGETS rc_server DESTINATION lib/${PROJECT_NAME})
-install(DIRECTORY include/ DESTINATION include)
-
-# 网页界面只维护一份：直接用 Python 包里那一份，避免两份前端代码漂移
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../flight_ui/web/
-  DESTINATION share/${PROJECT_NAME}/web
-  FILES_MATCHING PATTERN "*.html" PATTERN "*.js" PATTERN "*.css"
-)
-install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
+if(BUILD_TESTING)
+  find_package(ament_lint_auto REQUIRED)
+  # the following line skips the linter which checks for copyrights
+  # comment the line when a copyright and license is added to all source files
+  set(ament_cmake_copyright_FOUND TRUE)
+  # the following line skips cpplint (only works in a git repo)
+  # comment the line when this package is in a git repo and when
+  # a copyright and license is added to all source files
+  set(ament_cmake_cpplint_FOUND TRUE)
+  ament_lint_auto_find_test_dependencies()
+endif()
 
 ament_package()
