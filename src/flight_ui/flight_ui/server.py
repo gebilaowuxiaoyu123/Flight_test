@@ -33,6 +33,8 @@ class RosWorker:
             'deadman': False,
         }
         self._last_update = 0.0
+        # 同一时刻只允许一个控制器，避免遗留的浏览器标签页抢摇杆。
+        self._owner = None
         self._node = None
         self._executor = None
         self._thread = None
@@ -67,8 +69,15 @@ class RosWorker:
         if rclpy.ok():
             rclpy.shutdown()
 
-    def set_sticks(self, roll, pitch, yaw, throttle, deadman):
+    def set_sticks(self, roll, pitch, yaw, throttle, deadman, client_id=None):
+        now = time.monotonic()
         with self._lock:
+            # 现有控制者持续发帧（50 Hz）时独占；一旦停发 0.6 s 就让位，
+            # 这样关掉/切走一个页面不会把另一个页面锁死。
+            if self._owner is not None and client_id != self._owner:
+                if now - self._last_update < 0.6:
+                    return False
+            self._owner = client_id
             self._sticks.update({
                 'roll': float(roll),
                 'pitch': float(pitch),
@@ -76,7 +85,15 @@ class RosWorker:
                 'throttle': float(throttle),
                 'deadman': bool(deadman),
             })
-            self._last_update = time.monotonic()
+            self._last_update = now
+            return True
+
+    def release_client(self, client_id):
+        with self._lock:
+            if self._owner == client_id:
+                self._owner = None
+                self._sticks['deadman'] = False
+                self._sticks['throttle'] = -1.0
 
     def _tick(self):
         now = time.monotonic()
@@ -96,6 +113,30 @@ class RosWorker:
     def telemetry(self):
         return self._telemetry.snapshot() if self._telemetry else {}
 
+    # 4021 机架没有 GPS，PX4 的 AUTO_LOITER 位置检查无法通过；
+    # 解锁前必须先切到不依赖 GPS 的手动位置模式。
+    MANUAL_NAV_STATES = {0, 1, 2, 5, 10, 15}  # MANUAL/ALTCTL/POSCTL/ACRO/STABILIZED
+
+    def _ensure_manual_mode(self):
+        if self.telemetry().get('nav_state') not in self.MANUAL_NAV_STATES:
+            self._adapter.set_mode('POSCTL')
+            time.sleep(0.8)
+
+    def _arm_with_retry(self, deadline_s=10.0):
+        """PX4 可能还在跑 arming checks（EKF 收敛、气压计预热），重试几秒。"""
+        deadline = time.monotonic() + deadline_s
+        while time.monotonic() < deadline:
+            self._adapter.arm(True)
+            armed_deadline = time.monotonic() + 1.0
+            while time.monotonic() < armed_deadline:
+                if self.telemetry().get('armed'):
+                    return True
+                time.sleep(0.1)
+            if self.telemetry().get('armed'):
+                return True
+            self._ensure_manual_mode()
+        return False
+
     def arm(self):
         with self._lock:
             sticks = dict(self._sticks)
@@ -103,8 +144,13 @@ class RosWorker:
             return False, 'deadman not held'
         if sticks['throttle'] > -0.8:
             return False, 'throttle must be at minimum'
-        self._adapter.arm(True)
+        threading.Thread(target=self._arm_sequence, daemon=True).start()
         return True, 'arm command sent'
+
+    def _arm_sequence(self):
+        self._ensure_manual_mode()
+        if not self._arm_with_retry():
+            self._adapter.arm(False)
 
     def disarm(self):
         self._adapter.arm(False)
@@ -132,13 +178,8 @@ class RosWorker:
         return True, f'takeoff to {altitude} m requested'
 
     def _takeoff_sequence(self, altitude):
-        self._adapter.arm(True)
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline:
-            if self.telemetry().get('armed'):
-                break
-            time.sleep(0.1)
-        else:
+        self._ensure_manual_mode()
+        if not self._arm_with_retry():
             return
         time.sleep(0.3)
         self._adapter.set_mode('POSCTL')
@@ -206,6 +247,7 @@ async def websocket_endpoint(ws: WebSocket):
                     data.get('yaw', 0.0),
                     data.get('throttle', -1.0),
                     data.get('deadman', False),
+                    client_id=id(ws),
                 )
             elif kind == 'arm':
                 ok, message = worker.arm()
@@ -235,6 +277,7 @@ async def websocket_endpoint(ws: WebSocket):
         pass
     finally:
         sender_task.cancel()
+        worker.release_client(id(ws))
 
 
 def main(args=None):

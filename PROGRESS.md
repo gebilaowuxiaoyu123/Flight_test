@@ -1,7 +1,9 @@
 # 项目进度
 
 当前阶段：**P1–P6 已完成并跑通**（光流 + 深度 + Web 遥控器同机联调）
-最后更新：2026-10-21 03:45
+最后更新：2026-10-21 20:30
+
+> 操作手册（从零安装、排错决策树、速查表）：[REBUILD.md](REBUILD.md)
 
 ## 断点续做（断线后从这里开始）
 
@@ -29,7 +31,7 @@ ros2 run flight_ui ui_server            # http://127.0.0.1:8000/
 ```
 
 4. 浏览器打开 `http://127.0.0.1:8000/`，按住“按住使能”，油门在最低，点 `TAKEOFF`；`LAND` 降落，`KILL` 紧急停。
-5. 若要从头安装，按 [docs/01-environment.md](docs/01-environment.md) → [docs/02-px4-sitl.md](docs/02-px4-sitl.md) 顺序做。
+5. 若要从头安装，按 [REBUILD.md](REBUILD.md) 第三章，或 [docs/01-environment.md](docs/01-environment.md) → [docs/02-px4-sitl.md](docs/02-px4-sitl.md) 顺序做。
 
 ## 里程碑
 

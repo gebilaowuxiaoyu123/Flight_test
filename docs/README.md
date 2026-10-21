@@ -25,6 +25,8 @@
 | [09-troubleshooting.md](09-troubleshooting.md) | 常见错误排查 | ✅ 已完成 |
 | [10-exercises.md](10-exercises.md) | 练习与总验收 | ✅ 已完成 |
 
+> 想直接照做（而不是读原理）？看 [REBUILD.md](../REBUILD.md)：一条命令启动、从零安装、排错决策树、速查表。
+
 > 状态说明：✅ 表示命令和验收步骤可直接照做；🟡 表示设计已定，代码实现会在对应里程碑补齐。
 
 ## 约定

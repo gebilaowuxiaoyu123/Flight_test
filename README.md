@@ -71,6 +71,11 @@ flight_project/
 | 扩容后 | 24.04 + Jazzy + PX4 v1.17/1.18 + Harmonic（`ros_gz` 可用二进制） |
 | 更远 | Gazebo Jetty + ROS 2 Kilted/Rolling |
 
+## 从零复现手册
+
+**如果你要自己从零重装、或者我不在场时需要排查问题，先看 [REBUILD.md](REBUILD.md)。**
+里面有：一条命令启动、每个阶段的命令与验收、我踩过的 10 个坑、故障决策树、速查表。
+
 ## 一键启动完整演示
 
 ```bash

@@ -2,7 +2,8 @@
 
 import threading
 
-from px4_msgs.msg import BatteryStatus, VehicleLocalPosition, VehicleStatus
+from px4_msgs.msg import (BatteryStatus, VehicleLandDetected,
+                          VehicleLocalPosition, VehicleStatus)
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
 NAV_STATE_NAMES = {
@@ -47,6 +48,7 @@ class Telemetry:
             'voltage': 0.0,
             'xy_valid': False,
             'z_valid': False,
+            'landed': True,
         }
 
         # PX4 appends the uORB message version when MESSAGE_VERSION > 0.
@@ -60,6 +62,9 @@ class Telemetry:
             self._on_position, qos)
         node.create_subscription(
             BatteryStatus, '/fmu/out/battery_status', self._on_battery, qos)
+        node.create_subscription(
+            VehicleLandDetected, '/fmu/out/vehicle_land_detected',
+            self._on_landed, qos)
 
     def _on_status(self, msg):
         with self._lock:
@@ -84,6 +89,10 @@ class Telemetry:
                 self._state['battery'] = float(msg.remaining * 100.0)
             else:
                 self._state['battery'] = -1.0
+
+    def _on_landed(self, msg):
+        with self._lock:
+            self._state['landed'] = bool(msg.landed)
 
     def snapshot(self):
         with self._lock:
