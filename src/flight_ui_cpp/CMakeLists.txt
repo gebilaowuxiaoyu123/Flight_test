@@ -9,6 +9,10 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
+# Boost.Beast 是 header-only，但要链 Boost.System / Boost.Thread
+find_package(Boost REQUIRED COMPONENTS system thread)
+# JSON 用 jsoncpp（JsonCpp::JsonCpp 会自动带上 /usr/include/jsoncpp）
+find_package(jsoncpp REQUIRED)
 
 add_executable(rc_server src/rc_server.cpp)
 target_include_directories(rc_server PUBLIC
@@ -20,6 +24,11 @@ ament_target_dependencies(
   "rclcpp"
   "px4_msgs"
 )
+# 注意：ament_target_dependencies 用的是 plain 签名，
+# 这里必须也用 plain（不能写 PRIVATE/PUBLIC），否则 CMake 报
+# "must be either all-keyword or all-plain"
+target_include_directories(rc_server SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
+target_link_libraries(rc_server ${Boost_LIBRARIES} JsonCpp::JsonCpp)
 
 install(TARGETS rc_server
   DESTINATION lib/${PROJECT_NAME})
