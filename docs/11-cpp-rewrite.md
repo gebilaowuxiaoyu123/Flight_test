@@ -970,3 +970,79 @@ diff -ru /tmp/answer src/flight_ui_cpp | less                # 最后对照
 | 1 h | §11 调试 + §12 验收 | 全部打勾 |
 
 总工时约 **10 小时**（我第一次写用了两晚，其中一半时间在 §5.2 和 §9.1 这两个坑上）。
+
+---
+
+## 附录 A：无 GPS + 光流下的实际控制方式（实测结论）
+
+第 6 章讲 `DO_SET_MODE` 时假设了 POSCTL 可用。**在无 GPS、只有光流 + 气压计的
+`x500_flow_depth` 机架上有两条实测结论，写死记下来：**
+
+| 现象 | 结论 |
+|---|---|
+| POSCTL 下油门（高度）有效，横滚/俯仰完全没反应 | `vehicle_local_position` 虽然报 `xy_valid=true`，但 POSCTL 的水平速度环在无 GNSS 时被飞控抑制。**不要用 POSCTL 做水平机动。** |
+| ALTCTL 下横滚/俯仰直接改变姿态角，飞机真的会平移 | 无 GPS 场景用 **ALTCTL**：姿态杆 → 姿态角，油门杆 → 爬升率。配合光流给的速度反馈，外环做一层位置保持即可精确飞航线。 |
+
+ALTCTL 本身不保位置，松杆会漂。`scripts/demo_show.py` 里的 `Controller`
+做的是「位置误差 → 期望速度 → 姿态杆量」的串级控制，积分项用来消除漂移。
+
+### 光流网格是硬约束
+
+`flow.sdf` 里 `flow_grid` 原来只有 **8×8 m**（±3.9 m，0.2 m 黑白格）。
+一旦飞出网格，光流没有纹理可用 → EKF 立刻发散，位置估计跑飞（实测一次
+22 秒漂了 71 m，高度估计掉到 -7.6 m）。现在已扩大到 **12×12 m**（±6 m，0.25 m 格，
+2304 块），航线也必须留在网格内。
+
+另外 `x=+4` 处有一面 6 m 高的 `depth_wall`（深度相机实验用），**前进航线要
+给这面墙留出 ≥1.5 m 余量**，否则会撞。
+
+---
+
+## 附录 B：180 秒演示视频的录制链路
+
+`scripts/demo_show.py` 一条命令完成「飞 + 录 + 合成」：
+
+```
+脚本 --WebSocket(50Hz 摇杆帧)--> rc_server(C++) --/fmu/in/manual_control_input--> PX4
+     <--ROS /fmu/out/vehicle_local_position, vehicle_attitude--  （控制环要高频反馈）
+```
+
+画面是**三个真实来源拼在同一块屏幕上**再用 ffmpeg 抓：
+
+| 区域 | 来源 | 说明 |
+|---|---|---|
+| 左上 1280×720 | `gz sim -g`（Gazebo GUI，真机渲染） | 必须跑在真显示器上才能吃到 NVIDIA GPU；Xephyr 嵌套 X 只能走 llvmpipe，实 时率会掉到 0.2 |
+| 右上 640×720 | Firefox 打开 `http://127.0.0.1:8000/` | 真实网页，HUD 实时刷新 |
+| 下方 1920×360 | `Overlay` 类用 PIL 现画 | 手柄、姿态仪、航迹图、阶段进度、遥测 |
+
+手柄不是装饰：**画出来的摇杆位置就是这一刻真的发出去的那 4 个杆量**，
+所以「手柄与飞行姿态对应」是数据上的恒等，不是对嘴型。
+
+录制命令：
+
+```bash
+python3 scripts/demo_show.py --record artifacts/flight_show_final.mp4
+# 只飞不录（调试用）
+python3 scripts/demo_show.py --dry-run
+```
+
+调完面板排版想重出成片又不想重飞（重飞有 EKF 发散风险）时，用日志重渲染下半屏：
+
+```bash
+python3 scripts/rerender_panel.py --video in.mp4 --out out.mp4
+```
+
+### 录制前必须检查的三件事
+
+1. **EKF 姿态没翻**：`roll/pose` 接近 0。撞过机之后 EKF 会翻成 ±180°，
+   表现是解锁永远被拒，日志里 `Preflight Fail: Attitude failure (roll)`。
+   只能重启整套栈，没有别的办法。
+2. **模式是 ALTCTL**（`nav_state == 1`），脚本会自己确认，切不过去就中止。
+3. **窗口位置**：Gazebo 与 Firefox 的 `y` 必须对齐，录制起点是
+   `x11grab -i :0.0+<gz_x>,<gz_y>`，脚本默认 `+2570,172`。
+
+### 一个容易踩的坑：回声式 WebSocket 必须持续发帧
+
+C++ 后端是「读一帧 → 回一帧遥测」的回声式设计。所以**只要客户端停发摇杆，
+就再也收不到遥测**，读到的全是上一次的缓存值。调试时看到的「模式切了没生效」
+「解锁没反应」多半是读到了过期遥测，不是真的失败。发送线程必须一直 50 Hz 转。
