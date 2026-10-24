@@ -1,1 +1,2 @@
-artifacts/
+artifacts/*.mp4
+!artifacts/.gitignore
