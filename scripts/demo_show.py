@@ -36,9 +36,9 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 # ---------------------------------------------------------------- 画面参数
 W, H = 1920, 1080
 PANEL_H = 360        # 下半屏：手柄 + 航迹 + 遥测
-PIP_W, PIP_H = 320, 180
-PIP_FPV = (0, 720 - PIP_H)      # 第一视角（左下角）
-PIP_TOP = (1280 - PIP_W, 720 - PIP_H)  # 俯视（右下角）
+PIP_W, PIP_H = 480, 270
+PIP_FPV = (0, 720 - PIP_H)              # 第一视角（左下角）
+PIP_TOP = (1280 - PIP_W, 720 - PIP_H)   # 俯视（右下角）
 FPS = 25
 
 FONT_PATH = '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc'
@@ -193,6 +193,23 @@ CAM_TOPICS = {
 }
 
 
+def read_true_pose(max_age=0.4):
+    """读 scripts/pose_writer.py 写的 Gazebo 真实位姿。
+
+    无 GPS + 光流时 PX4 的位置估计会漂（实测 1~2 m），拿它做闭环会让
+    目标点落到真实世界的错误位置 —— 轻则航线跑偏，重则撞墙。
+    位置反馈改用真实位姿，姿态/模式仍走 PX4。
+    """
+    try:
+        with open('/tmp/cam_target.json') as fh:
+            d = json.load(fh)
+        if time.time() - float(d.get('t', 0)) > max_age:
+            return None
+        return d
+    except Exception:
+        return None
+
+
 class CameraFeed:
     """订阅三路机载/机外相机，缓存最近一帧 PIL 图。"""
 
@@ -233,6 +250,7 @@ class Controller:
     VMAX = 1.5         # 期望速度上限 (m/s)，小场地不需要快
     KV = 0.16          # 速度误差 → 杆量 (杆量/(m/s))
     KI = 0.045
+    FF = 0.16          # 速度前馈：实测满杆约 5 m/s；留余量避免杆量打满
     KP_ALT = 0.55      # 高度误差 → 油门杆
     KYAW = 0.85
 
@@ -265,8 +283,10 @@ class Controller:
         self._if = clamp(self._if + ef * dt, -3.0, 3.0)
         self._ir = clamp(self._ir + er * dt, -3.0, 3.0)
 
-        pitch = clamp(self.KV * ef + self.KI * self._if, -0.55, 0.55)
-        roll = clamp(self.KV * er + self.KI * self._ir, -0.55, 0.55)
+        # 前馈 + 反馈：只有反馈时，杆量永远追不上"期望速度"，
+        # 画面上就会出现"目标在动、手柄几乎不动"
+        pitch = clamp(self.FF * vf_d + self.KV * ef + self.KI * self._if, -0.45, 0.45)
+        roll = clamp(self.FF * vr_d + self.KV * er + self.KI * self._ir, -0.45, 0.45)
 
         dhead = math.atan2(math.sin(self.t_heading - st.heading),
                            math.cos(self.t_heading - st.heading))
@@ -458,23 +478,27 @@ class Overlay:
 
 # ---------------------------------------------------------------- 任务编排
 def build_mission(x0, y0, alt0):
-    """阶段表。场地是 12x12 m 光流网格，x=+4 处有一面 6 m 高的测距墙，
-    所以前进只走 2.6 m，8 字放在 -X 侧，全程留在网格内。"""
-    fx = x0 + 1.9                    # 前进终点（离 x=4 的墙留足余量）
-    cy = y0 - 1.6                    # 左转后的横向位置
+    """阶段表。
+
+    关键点：每段的**目标都在持续移动**，不是"飞到点就停"。
+    否则控制器很快回中，画面上手柄一动不动 —— 这是上一版最大的问题。
+    场地限制：光流网格 ±6 m，x=+4 处有 6 m 高的测距墙。
+    """
     return [
-        dict(name='系统就绪', dur=8, x=x0, y=y0, alt=0.0, follow=False, hdg=0.0),
-        dict(name='解锁 ARM', dur=4, x=x0, y=y0, alt=0.0, follow=False, hdg=0.0),
-        dict(name='起飞', dur=14, x=x0, y=y0, alt=1.4, follow=False, hdg=0.0),
-        dict(name='前进', dur=22, x=fx, y=y0, alt=1.4, follow=False, hdg=0.0),
-        dict(name='左转', dur=20, x=fx, y=cy, alt=1.4, follow=False, hdg=2.2),
-        dict(name='俯冲 & 攀升', dur=22, x=fx, y=cy, alt=2.0, follow=False,
-             hdg=math.pi),
-        dict(name='绕 8 字', dur=50, x=x0 - 0.4, y=cy, alt=1.8,
-             follow=True, hdg=2.2),
-        dict(name='返回原点', dur=16, x=x0, y=y0, alt=1.4, follow=False, hdg=0.0),
-        dict(name='降落', dur=20, x=x0, y=y0, alt=0.0, follow=False, hdg=0.0),
-        dict(name='任务完成', dur=4, x=x0, y=y0, alt=0.0, follow=False, hdg=0.0),
+        dict(name='系统就绪', dur=8, kind='idle'),
+        dict(name='解锁 ARM', dur=4, kind='arm'),
+        # 起飞：爬到 1.4 m 后继续在 1.0~1.8 之间起伏，油门一直有动作
+        dict(name='起飞', dur=14, kind='alt', alt=(0.0, 1.8), cycles=1.6),
+        # 前进：来回推杆，1 个来回 11 s
+        dict(name='前进', dur=22, kind='fwd', amp=1.2, cycles=3.4),
+        # 左转：持续给偏航杆，机体连续自转约两圈
+        dict(name='左转', dur=20, kind='spin', rate=0.30),
+        # 俯冲 & 攀升：0.9~2.1 m 之间两次起伏
+        dict(name='俯冲 & 攀升', dur=22, kind='alt', alt=(0.9, 2.1), cycles=2.0),
+        dict(name='绕 8 字', dur=46, kind='fig8'),
+        dict(name='返回原点', dur=16, kind='goto'),
+        dict(name='降落', dur=24, kind='descend'),
+        dict(name='任务完成', dur=4, kind='land'),
     ]
 
 
@@ -488,7 +512,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--record', default='')
     ap.add_argument('--dry-run', action='store_true')
-    ap.add_argument('--grab', default=':0.0+3850,172')
+    ap.add_argument('--grab', default=':1.0+0,0')
     ap.add_argument('--duration', type=int, default=180)
     args = ap.parse_args()
 
@@ -498,6 +522,23 @@ def main():
     cams.attach(st.node)
     ctrl = Controller()
     ov = Overlay()
+
+    class PoseView:
+        """位置取自真实位姿，姿态/航向仍取 PX4。"""
+        __slots__ = ('x', 'y', 'z')
+
+        def __init__(self):
+            self.x = self.y = 0.0
+            self.z = 0.0
+
+        def __getattr__(self, name):
+            return getattr(st, name)
+
+        @property
+        def alt(self):
+            return -self.z
+
+    pos = PoseView()
     canvas = Image.new('RGB', (W, H), (12, 14, 18))   # 整帧画布，网页那块留黑给 ffmpeg 叠
     pip_font = font(18, True)
 
@@ -576,14 +617,16 @@ def main():
         time.sleep(1.5)
     x0, y0 = st.x, st.y
     st.x0, st.y0 = x0, y0
+    pos.x, pos.y, pos.z = st.x, st.y, st.z
     print(f'起始位置 x={x0:.2f} y={y0:.2f} alt={st.alt:.2f} '
           f'roll={math.degrees(st.roll):+.1f} pitch={math.degrees(st.pitch):+.1f}')
     if abs(st.roll) > 0.5 or abs(st.pitch) > 0.5:
         print('!! EKF 姿态异常（可能已翻转），需重启仿真后再录', file=sys.stderr)
         return 2
 
-    ctrl.xlim = (x0 - 4.0, x0 + 2.2)      # +X 侧给 x=4 的墙留安全距离
-    ctrl.ylim = (y0 - 3.6, y0 + 3.6)
+    # 安全边界按世界坐标算（x=+4 有 6 m 高的墙），不要相对起点漂移
+    ctrl.xlim = (-2.6, 2.4)
+    ctrl.ylim = (-2.6, 2.6)
     mission = build_mission(x0, y0, 0.0)
     total = len(mission)
     path = [(0.0, 0.0)]
@@ -612,19 +655,19 @@ def main():
     try:
         for i, mg in enumerate(mission):
             t_stage0 = time.time()
-            ctrl.tx, ctrl.ty = mg['x'], mg['y']
-            ctrl.talt = mg['alt']
-            ctrl.t_heading = mg['hdg']
-            ctrl.heading_follow = mg['follow']
+            kind = mg['kind']
+            # 每段的基线：起点位置/高度，后面按 kind 生成持续移动的目标
+            base_x, base_y, base_alt = pos.x, pos.y, max(pos.alt, 0.0)
+            ctrl.tx, ctrl.ty, ctrl.talt = base_x, base_y, base_alt
+            ctrl.t_heading = st.heading
+            ctrl.heading_follow = (kind == 'fig8')
             ctrl.reset_integrators()
+            spin_yaw = 0.0
 
-            if mg['name'] == '解锁 ARM':
+            if kind == 'arm':
                 ws.send({'type': 'arm'})
                 last_arm = time.time()
-            if mg['name'] == '降落':
-                # 先按普通下降高度，落地后按 LAND 收尾
-                pass
-            if mg['name'] == '任务完成':
+            if kind == 'land':
                 ws.send({'type': 'land'})
 
             if i == 3 and not ws.telemetry.get('armed'):
@@ -641,31 +684,65 @@ def main():
                 dt = max(now - t_prev, 1e-3)
                 t_prev = now
 
-                if mg['name'] == '绕 8 字':
+                # 位置反馈仍用 PX4 的 vehicle_local_position。
+                # 曾试过换 Gazebo 真实位姿做闭环，但 PX4 的 NED 局部系与
+                # Gazebo 世界系在对齐上会漂，混用会让控制器发散（实测飞出 100+ m）。
+                # 真实位姿只在跟拍相机侧使用（scripts/pose_writer.py），
+                # 那是"看得见飞机"的问题，不参与控制。
+                pos.x, pos.y, pos.z = st.x, st.y, st.z
+
+                # ---- 每段的目标轨迹：始终在动，杆量才不会长时间回中 ----
+                phase = 2 * math.pi * mg.get('cycles', 1) * (t_stage / mg['dur'])
+                if kind == 'alt':
+                    lo, hi = mg['alt']
+                    mid, amp = (lo + hi) / 2, (hi - lo) / 2
+                    # 从低端起步，先爬后沉
+                    ctrl.talt = mid + amp * math.sin(phase - math.pi / 2)
+                elif kind == 'fwd':
+                    # 往复推杆：幅度 1.4 m、周期约 6 s → 峰值 1.4 m/s，姿态杆约 ±0.28
+                    ctrl.tx = base_x + mg['amp'] * math.sin(phase - math.pi / 2)
+                    ctrl.ty = base_y
+                    ctrl.talt = base_alt
+                elif kind == 'spin':
+                    ctrl.tx, ctrl.ty, ctrl.talt = base_x, base_y, base_alt
+                    spin_yaw = mg['rate']
+                elif kind == 'fig8':
                     u = 2 * math.pi * (t_stage / (mg['dur'] / 2.0))
-                    ctrl.tx, ctrl.ty = figure8(mg['x'], mg['y'], u)
-                if mg['name'] == '俯冲 & 攀升':
-                    ctrl.talt = 0.8 if t_stage < mg['dur'] * 0.45 else 2.0
+                    ctrl.tx, ctrl.ty = figure8(base_x - 1.0, base_y, u)
+                    ctrl.talt = 1.9
+                elif kind == 'goto':
+                    # 螺旋进近：半径 2.6→0 收缩 + 一圈绕飞，全程都在动
+                    frac = t_stage / mg['dur']
+                    radius = 2.6 * (1.0 - frac)
+                    ang = 2 * math.pi * frac
+                    ctrl.tx = x0 + radius * math.cos(ang)
+                    ctrl.ty = y0 + radius * math.sin(ang)
+                    ctrl.talt = 1.4
+                elif kind == 'descend':
+                    ctrl.tx, ctrl.ty = base_x, base_y
+                    ctrl.talt = max(base_alt - 0.35 * t_stage, -0.05)
 
                 if abs(st.roll) > 1.0 or abs(st.pitch) > 1.0:
                     print('!! 姿态异常（可能撞机/翻转），中止录制', file=sys.stderr)
                     apply(0, 0, 0, -1.0)
                     return 3
-                roll, pitch, yaw, thr = ctrl.sticks(st, dt)
-                if mg['name'] in ('系统就绪', '解锁 ARM'):
+                roll, pitch, yaw, thr = ctrl.sticks(pos, dt)
+                if kind == 'spin':
+                    yaw = spin_yaw                      # ALTCTL 的偏航杆就是角速率指令
+                if kind in ('idle', 'arm'):
                     # 解锁硬性要求：油门在最低位。这阶段绝不能交给高度环
                     roll = pitch = yaw = 0.0
                     thr = -1.0
-                elif mg['name'] == '任务完成':
+                elif kind == 'land':
                     roll = pitch = yaw = 0.0
                     thr = -1.0            # 收尾压到底，确保落地
-                if mg['name'] == '解锁 ARM' and time.time() - last_arm > 2.0 \
+                if kind == 'arm' and time.time() - last_arm > 2.0 \
                         and not ws.telemetry.get('armed'):
                     ws.send({'type': 'arm'})
                     last_arm = time.time()
                 apply(roll, pitch, yaw, thr)
 
-                rel = (st.x - x0, st.y - y0)
+                rel = (pos.x - x0, pos.y - y0)
                 if not path or math.hypot(rel[0] - path[-1][0], rel[1] - path[-1][1]) > 0.05:
                     path.append(rel)
                 if log:
@@ -673,8 +750,8 @@ def main():
                         't': round(now - t_start, 3), 'stage': mg['name'],
                         'roll': round(roll, 4), 'pitch': round(pitch, 4),
                         'yaw': round(yaw, 4), 'throttle': round(thr, 4),
-                        'x': round(st.x, 3), 'y': round(st.y, 3),
-                        'alt': round(st.alt, 3), 'armed': ws.telemetry.get('armed'),
+                        'x': round(pos.x, 3), 'y': round(pos.y, 3),
+                        'alt': round(pos.alt, 3), 'armed': ws.telemetry.get('armed'),
                         'mode': ws.telemetry.get('mode'),
                     }) + '\n')
 
@@ -684,7 +761,7 @@ def main():
                     canvas.paste(cams.get('third', (1280, 720)), (0, 0))
                     draw_pip(cams.get('fpv', (PIP_W, PIP_H)), PIP_FPV, '第一视角 FPV')
                     draw_pip(cams.get('top', (PIP_W, PIP_H)), PIP_TOP, '俯视 TOP')
-                    canvas.paste(ov.render(st, ctrl, (roll, pitch, yaw, thr),
+                    canvas.paste(ov.render(pos, ctrl, (roll, pitch, yaw, thr),
                                            ws.telemetry, path, mg['name'], i, total,
                                            time.time() - t_start, t_stage,
                                            mg['dur'], True), (0, 720))
