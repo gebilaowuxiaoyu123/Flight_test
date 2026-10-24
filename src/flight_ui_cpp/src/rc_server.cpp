@@ -65,6 +65,18 @@ std::string modeNameOf(int nav_state)
     }
 }
 
+int mainModeOf(const std::string & name)
+{
+    if (name == "MANUAL")     return 1;
+    if (name == "ALTCTL")     return 2;
+    if (name == "POSCTL")     return 3;
+    if (name == "AUTO")       return 4;
+    if (name == "ACRO")       return 5;
+    if (name == "OFFBOARD")   return 6;
+    if (name == "STABILIZED") return 7;
+    return 0;
+}
+
 class SharedState
 {
 public:
@@ -282,6 +294,30 @@ void serveWebSocket(beast::tcp_stream stream,
                 ack["ok"] = true;
                 ack["message"] = "disarm command sent";
                 beast::error_code ack_ec;
+                ws.write(net::buffer(jsonString(ack)), ack_ec);
+            } else if (type == "mode") {
+                const std::string wanted = root.get("mode", "").asString();
+                const int main_mode = mainModeOf(wanted);
+
+                // ack 先声明好，两条路（成功/失败）都往同一个变量里填
+                Json::Value ack(Json::objectValue);
+                ack["type"] = "ack";
+                ack["action"] = "mode";
+                beast::error_code ack_ec;
+
+                if (main_mode == 0) {
+                    ack["ok"] = false;
+                    ack["message"] = "unknown mode: " + wanted;
+                } else {
+                    // command 176 = DO_SET_MODE
+                    // param1 = 1  → 启用"自定义模式"，告诉 PX4 我要用 param2 那个号
+                    // param2      → 主模式号
+                    sendCommand(cmd_pub, nowUs(node), 176,
+                                1.0F, static_cast<float>(main_mode));
+                    ack["ok"] = true;
+                    ack["message"] = "switch to " + wanted + " requested";
+                }
+
                 ws.write(net::buffer(jsonString(ack)), ack_ec);
             }
         }
