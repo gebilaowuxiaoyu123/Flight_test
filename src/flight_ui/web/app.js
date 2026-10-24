@@ -3,6 +3,7 @@
   const connEl = $('conn');
   const armedEl = $('armed');
   const modeEl = $('mode');
+  const ctrlEl = $('ctrl');
   const altEl = $('alt');
   const batEl = $('bat');
   const logEl = $('log');
@@ -135,6 +136,19 @@
     if (confirm('确认 KILL？将立即上锁并请求飞行终止。')) send({ type: 'kill' });
   });
 
+  function setCtrlLabel(kind) {
+    if (kind === 'you') {
+      ctrlEl.textContent = '本机操控';
+      ctrlEl.className = 'pill ok';
+    } else if (kind === 'other') {
+      ctrlEl.textContent = '外部操控';
+      ctrlEl.className = 'pill warn';
+    } else {
+      ctrlEl.textContent = '空闲';
+      ctrlEl.className = 'pill';
+    }
+  }
+
   function updateTelemetry(t) {
     telemetry = { ...telemetry, ...t };
     armedEl.textContent = t.armed ? 'ARMED' : 'DISARMED';
@@ -142,6 +156,14 @@
     modeEl.textContent = t.mode ?? '--';
     altEl.textContent = (t.alt ?? 0).toFixed(2);
     batEl.textContent = t.battery >= 0 ? t.battery.toFixed(0) : '--';
+
+    // 杆量回显：别人在飞的时候，把摇杆视觉上跟到真实杆量。
+    // 自己握着控制权时绝不回写，否则手指拖动会被下一帧遥测拽回去。
+    setCtrlLabel(t.controller);
+    if (t.controller === 'other' && t.sticks) {
+      left.set(t.sticks.yaw ?? 0, t.sticks.throttle ?? -1);
+      right.set(t.sticks.roll ?? 0, t.sticks.pitch ?? 0);
+    }
   }
 
   function connect() {

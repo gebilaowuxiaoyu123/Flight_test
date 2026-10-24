@@ -13,21 +13,24 @@ html, body {
 
 #hud {
   display: flex;
-  gap: 14px;
+  flex-wrap: nowrap;
+  gap: 8px;
   align-items: center;
-  padding: 10px 16px;
+  padding: 8px 12px;
   background: #161b22;
   border-bottom: 1px solid #30363d;
-  font-size: 15px;
+  font-size: 14px;
+  white-space: nowrap;
 }
 #hud b { color: #58a6ff; }
 
 .pill {
-  padding: 4px 10px;
+  padding: 3px 9px;
   border-radius: 999px;
   background: #30363d;
   font-weight: 700;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
+  font-size: 13px;
 }
 .pill.ok { background: #1f6f43; }
 .pill.bad { background: #8b1e1e; }
@@ -120,3 +123,5 @@ button.kill { background: #8b1e1e; border-color: #f85149; }
   button { min-width: 64px; padding: 12px 10px; font-size: 13px; }
   main { height: calc(100vh - 170px); }
 }
+
+.pill.warn { background: #6b4a12; color: #ffcf70; }

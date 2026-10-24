@@ -29,13 +29,16 @@ import time
 import rclpy
 from PIL import Image, ImageDraw, ImageFont
 from px4_msgs.msg import VehicleAttitude, VehicleLocalPosition
+from sensor_msgs.msg import Image as RosImage
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 # ---------------------------------------------------------------- 画面参数
 W, H = 1920, 1080
-TOP_H = 720          # 上半屏：Gazebo + 网页
-PANEL_H = H - TOP_H  # 下半屏：手柄 + 航迹 + 遥测
+PANEL_H = 360        # 下半屏：手柄 + 航迹 + 遥测
+PIP_W, PIP_H = 320, 180
+PIP_FPV = (0, 720 - PIP_H)      # 第一视角（左下角）
+PIP_TOP = (1280 - PIP_W, 720 - PIP_H)  # 俯视（右下角）
 FPS = 25
 
 FONT_PATH = '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc'
@@ -181,6 +184,42 @@ class FlightState:
     @property
     def alt(self):
         return -self.z
+
+
+CAM_TOPICS = {
+    'third': '/world/flow/model/cam_third/link/link/sensor/third_cam/image',
+    'fpv': '/world/flow/model/x500_flow_depth_0/link/camera_link/sensor/IMX214/image',
+    'top': '/world/flow/model/cam_top/link/link/sensor/top_cam/image',
+}
+
+
+class CameraFeed:
+    """订阅三路机载/机外相机，缓存最近一帧 PIL 图。"""
+
+    def __init__(self):
+        self.latest = {k: None for k in CAM_TOPICS}
+        self.qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
+        self._node = None
+
+    def attach(self, node):
+        self._node = node
+        for key, topic in CAM_TOPICS.items():
+            node.create_subscription(
+                RosImage, topic, lambda m, k=key: self._on(m, k), self.qos)
+
+    def _on(self, msg, key):
+        try:
+            img = Image.frombytes('RGB', (msg.width, msg.height),
+                                  bytes(msg.data), 'raw', 'RGB')
+        except Exception:
+            return
+        self.latest[key] = img
+
+    def get(self, key, size=None):
+        img = self.latest.get(key)
+        if img is None:
+            img = Image.new('RGB', (size or (640, 360)), (18, 20, 26))
+        return img.resize(size, Image.BILINEAR) if size else img
 
 
 class Controller:
@@ -449,22 +488,45 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--record', default='')
     ap.add_argument('--dry-run', action='store_true')
-    ap.add_argument('--grab', default=':0.0+2570,172')
+    ap.add_argument('--grab', default=':0.0+3850,172')
     ap.add_argument('--duration', type=int, default=180)
     args = ap.parse_args()
 
     ws = WSClient()
     st = FlightState()
+    cams = CameraFeed()
+    cams.attach(st.node)
     ctrl = Controller()
     ov = Overlay()
+    canvas = Image.new('RGB', (W, H), (12, 14, 18))   # 整帧画布，网页那块留黑给 ffmpeg 叠
+    pip_font = font(18, True)
+
+    def draw_pip(im, pos, caption):
+        """贴一个画中画并加边框+标题，让小窗口和主画面分得开。"""
+        canvas.paste(im, pos)
+        d = ImageDraw.Draw(canvas)
+        x, y = pos
+        d.rectangle((x, y, x + PIP_W - 1, y + PIP_H - 1), outline=(90, 200, 255), width=2)
+        d.rectangle((x, y, x + 132, y + 26), fill=(10, 12, 16))
+        d.text((x + 8, y + 4), caption, font=pip_font, fill=(150, 215, 255))
 
     # 摇杆上行走独立线程，永远 50Hz（服务端 300ms 无帧就判使能失效）
     sp = {'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0, 'throttle': -1.0}
     sp_lock = threading.Lock()
     running = True
 
+    yielded = {'v': False}
+
     def sender():
         while running:
+            # 让贤：发现控制权被网页拿走就立刻停手，别和真人抢杆
+            if ws.telemetry.get('controller') == 'other':
+                if not yielded['v']:
+                    yielded['v'] = True
+                    print('控制权已被网页接管，脚本停止发杆', file=sys.stderr)
+                time.sleep(0.05)
+                continue
+            yielded['v'] = False
             with sp_lock:
                 s = dict(sp)
             try:
@@ -531,13 +593,14 @@ def main():
     if args.record and not args.dry_run:
         ff = subprocess.Popen([
             'ffmpeg', '-loglevel', 'error', '-y',
-            '-f', 'x11grab', '-video_size', '1920x720', '-framerate', str(FPS),
+            # 0: 网页窗口（真实 Firefox）
+            '-f', 'x11grab', '-video_size', '640x720', '-framerate', str(FPS),
             '-i', args.grab,
+            # 1: Python 合成的整帧（三视角 + 面板，网页区域留黑）
             '-f', 'rawvideo', '-pix_fmt', 'rgb24',
-            '-video_size', f'{W}x{PANEL_H}', '-framerate', str(FPS), '-i', 'pipe:0',
-            '-f', 'lavfi', '-i', f'color=c=0x101218:s={W}x{H}:r={FPS}',
+            '-video_size', f'{W}x{H}', '-framerate', str(FPS), '-i', 'pipe:0',
             '-filter_complex',
-            '[2:v][0:v]overlay=0:0[b];[b][1:v]overlay=0:720:format=auto,format=yuv420p[v]',
+            '[1:v][0:v]overlay=1280:0:format=auto,format=yuv420p[v]',
             '-map', '[v]', '-t', str(args.duration),
             '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
             '-movflags', '+faststart', args.record,
@@ -618,11 +681,15 @@ def main():
                 # 按固定帧率出图，避免渲染时长抖动
                 now = time.time()
                 if ff and now >= next_frame:
-                    frame = ov.render(st, ctrl, (roll, pitch, yaw, thr),
-                                      ws.telemetry, path, mg['name'], i, total,
-                                      time.time() - t_start, t_stage, mg['dur'], True)
+                    canvas.paste(cams.get('third', (1280, 720)), (0, 0))
+                    draw_pip(cams.get('fpv', (PIP_W, PIP_H)), PIP_FPV, '第一视角 FPV')
+                    draw_pip(cams.get('top', (PIP_W, PIP_H)), PIP_TOP, '俯视 TOP')
+                    canvas.paste(ov.render(st, ctrl, (roll, pitch, yaw, thr),
+                                           ws.telemetry, path, mg['name'], i, total,
+                                           time.time() - t_start, t_stage,
+                                           mg['dur'], True), (0, 720))
                     try:
-                        ff.stdin.write(frame.tobytes())
+                        ff.stdin.write(canvas.tobytes())
                     except BrokenPipeError:
                         ff = None
                     next_frame = max(next_frame + 1.0 / FPS, time.time())

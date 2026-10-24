@@ -1011,9 +1011,14 @@ ALTCTL 本身不保位置，松杆会漂。`scripts/demo_show.py` 里的 `Contro
 
 | 区域 | 来源 | 说明 |
 |---|---|---|
-| 左上 1280×720 | `gz sim -g`（Gazebo GUI，真机渲染） | 必须跑在真显示器上才能吃到 NVIDIA GPU；Xephyr 嵌套 X 只能走 llvmpipe，实 时率会掉到 0.2 |
-| 右上 640×720 | Firefox 打开 `http://127.0.0.1:8000/` | 真实网页，HUD 实时刷新 |
+| 左上 1280×720 | 机外跟拍相机 `cam_third`（GPU 渲染） | 由 `scripts/cam_follow.py` 每帧 `set_pose` 移动，始终把飞机放在画面正中 |
+| 左下 320×180 画中画 | 机载前视 `IMX214` | 第一人称 |
+| 右下 320×180 画中画 | 机顶下视 `cam_top` | 俯视，正上方朝下 |
+| 右上 640×720 | Firefox 打开 `http://127.0.0.1:8000/` | 真实网页，HUD 实时刷新，摇杆会回显真实杆量 |
 | 下方 1920×360 | `Overlay` 类用 PIL 现画 | 手柄、姿态仪、航迹图、阶段进度、遥测 |
+
+三路相机合成在 `scripts/demo_show.py` 里完成（PIL 贴图），ffmpeg 只负责把
+Python 合成的整帧和 x11grab 抓到的网页窗口叠加、编码。
 
 手柄不是装饰：**画出来的摇杆位置就是这一刻真的发出去的那 4 个杆量**，
 所以「手柄与飞行姿态对应」是数据上的恒等，不是对嘴型。
@@ -1046,3 +1051,52 @@ python3 scripts/rerender_panel.py --video in.mp4 --out out.mp4
 C++ 后端是「读一帧 → 回一帧遥测」的回声式设计。所以**只要客户端停发摇杆，
 就再也收不到遥测**，读到的全是上一次的缓存值。调试时看到的「模式切了没生效」
 「解锁没反应」多半是读到了过期遥测，不是真的失败。发送线程必须一直 50 Hz 转。
+
+
+### 三视角是怎么做的（踩坑记录）
+
+**不要用 gz-gui 的 `CameraTracking` 做跟拍。** `follow_target` / `follow_offset`
+按文档写了，相机纹丝不动。改用 **gz-transport 的 `/world/<world>/set_pose`
+服务直接搬相机模型**，实测 0.2 ms/次，50 Hz 毫无压力：
+
+- 世界文件里放两个 `static` 模型 `cam_third`（机外跟拍）和 `cam_top`（机顶俯视），
+  各带一个 camera sensor；
+- `scripts/cam_follow.py` 每帧把它们的位姿摆到「世界朝向固定 + 相对机体偏移」——
+  所以画面不会跟着机体打转，但飞机永远在正中；
+- 朝向四元数是 `Rz(yaw) * Ry(pitch)`，展开后 **x 分量是 `-sin(yaw/2)·sin(pitch/2)`**。
+  写成 `+` 会把俯仰变成横滚，画面就会歪（我踩过）。
+
+**相机目标位置必须用 Gazebo 的真实位姿，不能用 PX4 的 `vehicle_local_position`。**
+光流定位会漂，实测飞完一圈 PX4 估计的 (x,y) 与真实位置差了 2 m 以上，
+跟拍相机会直接丢目标。所以另起 `scripts/pose_writer.py` 把真实位姿写进
+`/tmp/cam_target.json`。
+
+**订阅要用 `dynamic_pose/info`，不要用 `pose/info`。** 后者包含全部 2300+ 块
+静态网格，gz 的 Python 绑定是纯 Python protobuf 实现，解析不过来 —— 目标文件
+更新率会掉到个位数 Hz，相机明显滞后于飞机。
+
+**跨进程传数据必须原子写**：`open(path, 'w')` 会先截断文件，读端可能读到
+半截 JSON 解析失败，然后相机就卡在上一帧位置（表现为「飞到一半飞机不见了」）。
+正确做法是写临时文件再 `os.replace`。
+
+### 网页摇杆回显
+
+服务端在遥测里多带两个字段：
+
+```json
+{"sticks": {"roll":..., "pitch":..., "yaw":..., "throttle":..., "deadman":...},
+ "controller": "you" | "other" | "none"}
+```
+
+`app.js` 只在 `controller === 'other'` 时把摇杆 knob 摆到真实杆量 ——
+自己操控时绝不回写，否则手指拖动会被下一帧遥测拽回去。
+
+控制权规则要同时满足两件事：
+
+- 没按使能的帧 **不能占住** 控制权（否则旁观页面会把 owner 抢走，HUD 显示错）；
+- 当前 owner 发来的 `deadman=false` **必须生效**（那是"松杆"动作）。
+
+即 `if (client_ != client && !deadman) return;`。
+
+另外 `scripts/demo_show.py` 实现了"让贤"：一旦在遥测里看到
+`controller == "other"`，脚本立刻停止发杆，把控制权让给网页上的人。

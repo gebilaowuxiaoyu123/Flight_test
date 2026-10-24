@@ -89,8 +89,10 @@ public:
                    double yaw, double throttle)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (client_ != 0 && client_ != client && !deadman) {
-            return;                                  // 别人握着杆，且我没按使能 → 忽略
+        // 没按使能的帧不能"占住"控制权（否则旁观页面会把 owner 抢走，HUD 显示错），
+        // 但当前 owner 发来的 deadman=false 必须生效 —— 那是"松杆"动作。
+        if (client_ != client && !deadman) {
+            return;
         }
         client_ = client;
         deadman_ = deadman;
@@ -158,19 +160,38 @@ public:
         battery_pct_ = (remaining >= 0.0F) ? static_cast<double>(remaining * 100.0F) : -1.0;
     }
 
-    Json::Value getTelemetry() const               // 读：拼成 JSON 发给网页
+    Json::Value getTelemetry() const { return getTelemetryFor(0); }
+
+    // 读：拼成 JSON 发给网页。带上当前真正下发的杆量和控制权归属，
+    // 页面据此把摇杆"回放"到真实位置（自己操控时不回放，避免和手指打架）。
+    Json::Value getTelemetryFor(uint64_t client) const
     {
-        std::lock_guard<std::mutex> lock(telemetry_mutex_);
         Json::Value root(Json::objectValue);
-        root["type"] = "telemetry";          // 前端靠它分流
-        root["armed"] = armed_;
-        root["nav_state"] = nav_state_;
-        root["mode"] = modeNameOf(nav_state_);   // 前端 HUD 显示用
-        root["z_valid"] = z_valid_;
-        root["z"] = z_;                          // 原始 NED，调试用
-        root["alt"] = z_valid_ ? -z_ : 0.0;      // NED 向下为正，取负才是高度
-        root["voltage_v"] = voltage_v_;
-        root["battery"] = battery_pct_;          // 百分数，-1 表示未知
+        {
+            std::lock_guard<std::mutex> lock(telemetry_mutex_);
+            root["type"] = "telemetry";          // 前端靠它分流
+            root["armed"] = armed_;
+            root["nav_state"] = nav_state_;
+            root["mode"] = modeNameOf(nav_state_);   // 前端 HUD 显示用
+            root["z_valid"] = z_valid_;
+            root["z"] = z_;                          // 原始 NED，调试用
+            root["alt"] = z_valid_ ? -z_ : 0.0;      // NED 向下为正，取负才是高度
+            root["voltage_v"] = voltage_v_;
+            root["battery"] = battery_pct_;          // 百分数，-1 表示未知
+        }
+        // 两把锁分开取，永不嵌套反序（别处没有先 control 后 telemetry 的路径）
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            Json::Value sticks(Json::objectValue);
+            sticks["roll"] = roll_;
+            sticks["pitch"] = pitch_;
+            sticks["yaw"] = yaw_;
+            sticks["throttle"] = throttle_stick_;
+            sticks["deadman"] = deadman_;
+            root["sticks"] = sticks;
+            root["controller"] = (client_ == 0) ? "none"
+                                : (client_ == client ? "you" : "other");
+        }
         return root;
     }
 
@@ -399,7 +420,31 @@ void serveWebSocket(beast::tcp_stream stream,
     // 用文本帧。不设的话默认二进制帧，浏览器收到 Blob，前端 JSON.parse 会失败
     ws.text(true);
 
-    // 进入 WS 循环：读一帧 JSON 更新摇杆，再回一帧 telemetry
+    // ---- 写串行化 + 独立遥测推送 ----
+    // Beast 同步流规则：同一连接允许 1 读 + 1 写并发，但绝不能 2 个写者。
+    // 所以读循环回 ack、推送线程发遥测，全部走这把锁。
+    std::mutex write_mu;
+    std::atomic<bool> alive{true};
+
+    auto send_text = [&](const std::string & payload) -> bool {
+        std::lock_guard<std::mutex> lock(write_mu);
+        if (!alive) return false;
+        beast::error_code wec;
+        ws.write(net::buffer(payload), wec);
+        if (wec) { alive = false; return false; }
+        return true;
+    };
+
+    // 10 Hz 推遥测，与客户端是否发帧无关（隐藏标签页 / 调试时也能看到实时状态）
+    std::thread pusher([&]() {
+        while (alive) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (!alive) break;
+            if (!send_text(jsonString(state.getTelemetryFor(client_id)))) break;
+        }
+    });
+
+    // 进入 WS 循环：读一帧 JSON 更新摇杆或执行命令
     for (;;)
     {
         beast::flat_buffer buffer;              // 每轮新建，天然不会有上一帧残留
@@ -437,8 +482,7 @@ void serveWebSocket(beast::tcp_stream stream,
                 ack["action"] = "disarm";
                 ack["ok"] = true;
                 ack["message"] = "disarm command sent";
-                beast::error_code ack_ec;
-                ws.write(net::buffer(jsonString(ack)), ack_ec);
+                send_text(jsonString(ack));
             } else if (type == "mode") {
                 const std::string wanted = root.get("mode", "").asString();
                 const int main_mode = mainModeOf(wanted);
@@ -447,8 +491,6 @@ void serveWebSocket(beast::tcp_stream stream,
                 Json::Value ack(Json::objectValue);
                 ack["type"] = "ack";
                 ack["action"] = "mode";
-                beast::error_code ack_ec;
-
                 if (main_mode == 0) {
                     ack["ok"] = false;
                     ack["message"] = "unknown mode: " + wanted;
@@ -462,7 +504,7 @@ void serveWebSocket(beast::tcp_stream stream,
                     ack["message"] = "switch to " + wanted + " requested";
                 }
 
-                ws.write(net::buffer(jsonString(ack)), ack_ec);
+                send_text(jsonString(ack));
             } else if (type == "arm" || type == "takeoff") {
                 const bool want_takeoff = (type == "takeoff");
                 const double altitude = root.get("altitude", 2.5).asDouble();
@@ -471,8 +513,6 @@ void serveWebSocket(beast::tcp_stream stream,
                 Json::Value ack(Json::objectValue);
                 ack["type"] = "ack";
                 ack["action"] = type;
-                beast::error_code ack_ec;
-
                 if (!control.valid) {
                     ack["ok"] = false;
                     ack["message"] = "deadman not held";
@@ -493,7 +533,7 @@ void serveWebSocket(beast::tcp_stream stream,
                     }
                 }
 
-                ws.write(net::buffer(jsonString(ack)), ack_ec);
+                send_text(jsonString(ack));
             } else if (type == "land") {
                 landNow(node, cmd_pub);
                 Json::Value ack(Json::objectValue);
@@ -501,8 +541,7 @@ void serveWebSocket(beast::tcp_stream stream,
                 ack["action"] = "land";
                 ack["ok"] = true;
                 ack["message"] = "land command sent";
-                beast::error_code ack_ec;
-                ws.write(net::buffer(jsonString(ack)), ack_ec);
+                send_text(jsonString(ack));
             } else if (type == "kill") {
                 killNow(node, cmd_pub);
                 state.setSticks(client_id, false, 0.0, 0.0, 0.0, -1.0);
@@ -511,18 +550,16 @@ void serveWebSocket(beast::tcp_stream stream,
                 ack["action"] = "kill";
                 ack["ok"] = true;
                 ack["message"] = "kill command sent";
-                beast::error_code ack_ec;
-                ws.write(net::buffer(jsonString(ack)), ack_ec);
+                send_text(jsonString(ack));
             }
         }
 
-        // 回一帧遥测。type 字段是前端分流依据，少了界面不会更新
-        ws.write(net::buffer(jsonString(state.getTelemetry())), ec);
-        if (ec) {
-            break;
-        }
     }
 
+    alive = false;
+    if (pusher.joinable()) {
+        pusher.join();
+    }
     state.releaseClient(client_id);      // 断开就把控制权交出来
 }
 
