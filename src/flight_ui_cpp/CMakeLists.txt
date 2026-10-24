@@ -10,6 +10,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
 # Boost.Beast 是 header-only，但要链 Boost.System / Boost.Thread
+find_package(ament_index_cpp REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system thread)
 # JSON 用 jsoncpp（JsonCpp::JsonCpp 会自动带上 /usr/include/jsoncpp）
 find_package(jsoncpp REQUIRED)
@@ -23,6 +24,7 @@ ament_target_dependencies(
   rc_server
   "rclcpp"
   "px4_msgs"
+  "ament_index_cpp"
 )
 # 注意：ament_target_dependencies 用的是 plain 签名，
 # 这里必须也用 plain（不能写 PRIVATE/PUBLIC），否则 CMake 报
@@ -32,6 +34,11 @@ target_link_libraries(rc_server ${Boost_LIBRARIES} JsonCpp::JsonCpp)
 
 install(TARGETS rc_server
   DESTINATION lib/${PROJECT_NAME})
+
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../flight_ui/web/
+  DESTINATION share/${PROJECT_NAME}/web
+  FILES_MATCHING PATTERN "*.html" PATTERN "*.js" PATTERN "*.css" PATTERN "*.png" PATTERN "*.ico"
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
