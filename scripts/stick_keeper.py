@@ -46,7 +46,23 @@ def read_stick():
         return dict(HOVER), True
 
 
+def _acquire_singleton(lock_path: str):
+    """同一时刻只允许一个实例。已有实例在跑就安静退出。
+
+    之前靠 fly.sh 杀进程清理，一旦 pidfile 丢失就会留下孤儿进程，
+    两个实例抢写 /tmp/telemetry.json，读端看到的数据时新时旧。
+    """
+    import fcntl
+    fh = open(lock_path, 'w')
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        sys.exit(0)
+    return fh          # 返回值要保活，进程退出前不能回收
+
+
 def main():
+    _lock = _acquire_singleton("/tmp/stick_keeper.lock")
     rclpy.init()
     node = Node('stick_keeper')
     qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)

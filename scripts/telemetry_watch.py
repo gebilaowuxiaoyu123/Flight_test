@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 import threading
 import time
@@ -122,11 +123,30 @@ def render(d):
     return '\n'.join(lines)
 
 
+def _acquire_singleton(lock_path: str):
+    """同一时刻只允许一个实例。已有实例在跑就安静退出。
+
+    之前靠 fly.sh 杀进程清理，一旦 pidfile 丢失就会留下孤儿进程，
+    两个实例抢写 /tmp/telemetry.json，读端看到的数据时新时旧。
+    """
+    import fcntl
+    fh = open(lock_path, 'w')
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        sys.exit(0)
+    return fh          # 返回值要保活，进程退出前不能回收
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--print', dest='do_print', action='store_true')
     ap.add_argument('--hz', type=float, default=8.0)
     args = ap.parse_args()
+
+    # --print 是"前台看"，只读不写：不抢锁、不写缓存文件，
+    # 这样它可以和后台那个写缓存的实例同时存在。
+    _lock = None if args.do_print else _acquire_singleton("/tmp/telemetry_watch.lock")
 
     rclpy.init()
     node = Watch()
@@ -138,25 +158,28 @@ def main():
     try:
         while True:
             d = node.as_dict()
-            try:
-                with open(JSON_OUT, 'w') as fh:
-                    json.dump(d, fh)
-            except OSError:
-                pass
             if args.do_print:
                 sys.stdout.write(prefix + render(d))
                 sys.stdout.flush()
+                time.sleep(period)
+                continue
+            try:
+                # 原子写：直接 open('w') 会先截断，读端可能读到空文件
+                with open(JSON_OUT + '.tmp', 'w') as fh:
+                    json.dump(d, fh)
+                os.replace(JSON_OUT + '.tmp', JSON_OUT)
+            except OSError:
+                pass
             time.sleep(period)
     except KeyboardInterrupt:
         pass
     finally:
         if args.do_print:
             print()
-        node.destroy_node()
-        try:
-            rclpy.shutdown()
-        except Exception:
-            pass
+        # spin 线程还停在 C 层时正常退出会 abort（Fatal Python error: _enter_buffered_busy），
+        # 用 os._exit 直接收摊
+        sys.stdout.flush()
+        os._exit(0)
 
 
 if __name__ == '__main__':
