@@ -67,7 +67,7 @@ done
 sleep 1
 setsid "${WORKSPACE_ROOT}/install/flight_ui_cpp/lib/flight_ui_cpp/rc_server" \
   > /tmp/rc_full.log 2>&1 &
-log "C++ 后端已启动（:8000）"
+log "C++ 后端 :8000 已启动"
 
 # ---------------------------------------------------------------- 3. 三路相机桥
 tmux has-session -t cams 2>/dev/null && tmux kill-session -t cams
@@ -76,7 +76,7 @@ tmux new-session -d -s cams "${ROS_ENV} && ros2 run ros_gz_bridge parameter_brid
   /world/${WORLD}/model/cam_third/link/link/sensor/third_cam/image@sensor_msgs/msg/Image@gz.msgs.Image \
   /world/${WORLD}/model/cam_top/link/link/sensor/top_cam/image@sensor_msgs/msg/Image@gz.msgs.Image \
   > /tmp/cams.log 2>&1"
-log "相机桥已启动（第一视角 / 跟拍 / 俯视）"
+log "三路相机桥已启动"
 
 # ---------------------------------------------------------------- 4. 真实位姿 + 相机动捕
 # gz 的 Python 绑定与 ROS 2 的 protobuf 版本冲突，必须走纯 Python 实现
@@ -89,7 +89,7 @@ setsid env PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python \
 sleep 3
 setsid env PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python \
   python3 "${PROJECT_ROOT}/scripts/cam_follow.py" > /tmp/camfollow.log 2>&1 &
-log "真实位姿写入器 + 相机动捕已启动"
+log "相机动捕已启动"
 
 # ---------------------------------------------------------------- 5. 嵌套 X + 浏览器
 # 关键：网页必须跑在 Xephyr 里，否则桌面一锁屏，x11grab 抓到的就是一整片黑
@@ -122,12 +122,12 @@ done
 DISPLAY=${XDISPLAY} xdotool windowsize "${WIN}" 640 720
 sleep 1
 DISPLAY=${XDISPLAY} xdotool windowmove "${WIN}" 0 0
-log "网页已就位（Xephyr :1，640x720 @ 0,0）"
+log "网页已就位"
 
 # ---------------------------------------------------------------- 6. 就绪检查
 sleep 3
 curl -fsS --max-time 5 http://127.0.0.1:8000/health >/dev/null || die "后端 /health 不通"
-log "全部就绪。画面布局：左上跟拍 + 左下第一视角 + 右下俯视 + 右上网页 + 下方仪表"
+log "全部就绪"
 
 # ---------------------------------------------------------------- 7. 录制
 if [[ "${1:-}" == "--record" ]]; then
@@ -137,8 +137,5 @@ if [[ "${1:-}" == "--record" ]]; then
     --record "${OUT}" --grab ":1.0+0,0"
   log "录制完成: ${OUT}"
 else
-  log "启动录制请执行："
-  log "  DISPLAY=:1 python3 scripts/demo_show.py --record artifacts/flight_show_final.mp4 --grab ':1.0+0,0'"
-  log "只试飞不录：python3 scripts/demo_show.py --dry-run"
-  log "全部停止：./scripts/run_show.sh --stop"
+  log "就绪：浏览器看 http://127.0.0.1:8000/ ；录片用 ./scripts/run_show.sh --record"
 fi

@@ -131,78 +131,34 @@ scripts/                      ← 运维脚本
 
 ## 三、怎么跑
 
-### 0. 编译
+日常只用三条命令：
 
 ```bash
-cd /home/wiki_wu/flight_project          # 必须在工作区根目录，不能在 src/ 里
+./scripts/run_show.sh              # 起全部服务，浏览器访问 http://127.0.0.1:8000/
+./scripts/run_show.sh --record     # 起服务并录 180 s 成片
+./scripts/run_show.sh --stop       # 停止
+```
+
+改过代码之后要先编译（**必须在工作区根目录**）：
+
+```bash
 source /opt/ros/humble/setup.bash
 colcon build --packages-select flight_ui_cpp
-source install/setup.bash                # 每次 build 之后都要重新 source
+source install/setup.bash
 ```
 
-> 改了前端（`src/flight_ui/web/`）也要重新 build —— 没有 `--symlink-install`
-> 时是**实体拷贝**到 `install/.../share/flight_ui_cpp/web/`。
+> 改了前端（`src/flight_ui/web/`）也要重新 build —— 是实体拷贝到
+> `install/.../share/flight_ui_cpp/web/`，不是软链。
 
-### 1. 起仿真（不含界面）
+`run_show.sh` 会依次起：仿真 → C++ 后端(:8000) → 三路相机桥 → 相机动捕
+→ Xephyr(:1) 里的浏览器。网页放在 Xephyr 里是因为桌面一锁屏，
+`x11grab` 抓到的那块会变成一片黑。
 
-```bash
-./scripts/run_demo.sh
-```
-
-它起 6 个 tmux 会话，其中 `ui` 是 **Python 版**界面。C++ 版要占同一个 8000 端口，
-所以用 C++ 时先：
+调试用的额外命令：
 
 ```bash
-tmux kill-session -t ui
-```
-
-会话一览（`tmux attach -t <名字>` 可以看日志）：
-
-| 会话 | 内容 |
-|---|---|
-| `agent` | MicroXRCEAgent（PX4 ↔ ROS 2 的 DDS 桥） |
-| `sitl` | PX4 + Gazebo（没有图形窗口时用 `HEADLESS=1`） |
-| `bridge` | 深度相机 / 点云 / camera_info 桥 |
-| `depth` | `min_depth` 感知节点 |
-| `flowlog` | 光流日志节点 |
-
-停止：`for s in agent sitl bridge depth flowlog ui; do tmux kill-session -t $s; done`
-
-### 2. 起 C++ 后端
-
-```bash
-source /opt/ros/humble/setup.bash && source install/setup.bash
-./install/flight_ui_cpp/lib/flight_ui_cpp/rc_server
-# 浏览器打开 http://127.0.0.1:8000/
-```
-
-按 `Ctrl-C` 停。想后台跑就 `nohup ... > /tmp/rc.log 2>&1 &`。
-
-### 3. 出片（一条命令）
-
-```bash
-./scripts/run_show.sh --record     # 起全部服务 + 录 180 s 成片
-./scripts/run_show.sh              # 只起服务，自己手动跑 demo_show.py
-./scripts/run_show.sh --stop       # 停掉录制相关服务
-```
-
-它会依次做：起仿真 → 起 C++ 后端 → 起三路相机桥 → 起真实位姿写入器 + 相机动捕
-→ 在 **Xephyr(:1)** 里起浏览器并摆到 640×720 → `/health` 自检 → 录制。
-
-> **为什么要 Xephyr**：如果网页窗口摆在你的真桌面上，一旦桌面锁屏，
-> `x11grab` 抓到的那块就是**一整片黑**。跑在嵌套 X 里则完全不受影响。
-
-单独手动跑录制：
-
-```bash
-DISPLAY=:1 python3 scripts/demo_show.py --record artifacts/flight_show_final.mp4 --grab ':1.0+0,0'
-python3 scripts/demo_show.py --dry-run          # 只飞不录，调试用
-```
-
-只调面板排版、不想重飞时：
-
-```bash
-python3 scripts/rerender_panel.py --video in.mp4 --out out.mp4    # 用 /tmp/flight_show_log.jsonl
+python3 scripts/demo_show.py --dry-run    # 只飞不录
+python3 scripts/rerender_panel.py --video in.mp4 --out out.mp4   # 只重做下半屏，不重飞
 ```
 
 ### 4. 验收
