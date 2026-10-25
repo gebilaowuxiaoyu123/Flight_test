@@ -263,34 +263,6 @@ std::string contentTypeOf(const std::string & path)
     return "text/plain; charset=utf-8";                      // 兜底
 }
 
-void sendCommend(rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr & pub, 
-    uint16_t command, 
-    float param1 = 0.0F, 
-    float param2 = 0.0F, 
-    float param3 = 0.0F, 
-    float param4 = 0.0F, 
-    float param5 = 0.0F, 
-    float param6 = 0.0F, 
-    float param7 = 0.0F)
-{
-    px4_msgs::msg::VehicleCommand msg;
-    msg.timestamp = static_cast<uint64_t>(rclcpp::Clock().now().nanoseconds() / 1000);
-    msg.param1 = param1;
-    msg.param2 = param2;
-    msg.param3 = param3;
-    msg.param4 = param4;
-    msg.param5 = param5;
-    msg.param6 = param6;
-    msg.param7 = param7;
-    msg.command = command;
-    msg.target_system = 1; // PX4 系统 ID
-    msg.target_component = 1; // PX4 组件 ID
-    msg.source_system = 1; // 本系统 ID
-    msg.source_component = 1; // 本组件 ID
-    msg.from_external = true; // 来自外部系统
-    pub->publish(msg);
-}
-
 // 发一条 VehicleCommand。所有命令都走这里，字段填法只写一次。
 // 命令号：400=解锁/上锁，176=切模式，22=起飞，21=降落，185=飞行终止
 void sendCommand(const rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr & pub,
