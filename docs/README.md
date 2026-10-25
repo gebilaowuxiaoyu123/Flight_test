@@ -25,6 +25,7 @@
 | [09-troubleshooting.md](09-troubleshooting.md) | 常见错误排查 | ✅ 已完成 |
 | [10-exercises.md](10-exercises.md) | 练习与总验收 | ✅ 已完成 |
 | [11-cpp-rewrite.md](11-cpp-rewrite.md) | **C++ 重写指南**（一步一步教你换语言） | ✅ 已完成 |
+| [12-how-to-read-and-run.md](12-how-to-read-and-run.md) | **代码怎么看、怎么跑**（读代码顺序 + 命令说明） | ✅ 已完成 |
 
 > 想直接照做（而不是读原理）？看 [REBUILD.md](../REBUILD.md)：一条命令启动、从零安装、排错决策树、速查表。
 >

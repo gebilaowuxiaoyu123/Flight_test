@@ -34,6 +34,15 @@ ROS 2 + PX4（四旋翼）+ Gazebo Harmonic 的仿真、遥控器界面与感知
 ./scripts/run_sitl_flow.sh
 ```
 
+**只想跑起来 / 出片：**
+
+```bash
+./scripts/run_show.sh            # 起仿真 + C++ 后端 + 三路相机 + 浏览器
+./scripts/run_show.sh --record   # 起服务并录一条 180 s 成片
+```
+
+代码按什么顺序读、每条命令在干什么，见 [docs/12-how-to-read-and-run.md](docs/12-how-to-read-and-run.md)。
+
 完整步骤从 [docs/README.md](docs/README.md) 开始。
 
 ## 目录结构
