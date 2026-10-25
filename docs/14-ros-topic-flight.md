@@ -27,6 +27,21 @@
 └────────────────────────────────────────────────────────┘
 ```
 
+## 后台在跑什么
+
+`fly.sh start` 会起 5 个 tmux 会话，出问题可以进去看日志：
+
+| 会话 | 内容 |
+|---|---|
+| `agent` | MicroXRCEAgent（PX4 ↔ ROS 2 的 DDS 桥） |
+| `sitl` | PX4 + Gazebo |
+| `stick` | 摇杆守护（50 Hz 补发） |
+| `tele` | 遥测缓存（`status` / `watch` 都读它） |
+
+```bash
+tmux attach -t tele      # 看遥测守护有没有在收数据；Ctrl-b d 退出
+```
+
 ## 飞
 
 ```bash
