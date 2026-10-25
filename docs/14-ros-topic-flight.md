@@ -1,134 +1,85 @@
-# 14 · 在终端用 ROS 话题飞飞机
+# 14 · 终端飞飞机
 
-两条路：**单条命令**（用 `ros2 topic pub`）和 **连续杆量**（用脚本循环发 50 Hz）。
+把所有 ROS 话题细节都包进了 `scripts/fly.sh`，你只敲动作词。
 
-## 一、先切模式（单条命令就够）
-
-```bash
-source /opt/ros/humble/setup.bash && source install/setup.bash
-
-ros2 topic pub --once /fmu/in/vehicle_command px4_msgs/msg/VehicleCommand \
-"{command: 176, param1: 1.0, param2: 2.0, target_system: 1, target_component: 1, source_system: 1, source_component: 1, from_external: true}"
-```
-
-- `176` = `DO_SET_MODE`，`param1 = 1` 是"启用自定义模式"，`param2 = 2` 是主模式号 ALTCTL
-- 主模式号：MANUAL=1、**ALTCTL=2**、POSCTL=3、AUTO=4、ACRO=5、OFFBOARD=6、STABILIZED=7
-
-验证：`ros2 topic echo /fmu/out/vehicle_status_v1 --qos-reliability best_effort --once | grep nav_state`
-
-## 二、解锁（必须同时有 50 Hz 摇杆帧）
-
-PX4 要求解锁时油门在最低位，且手动控制要"有效"。开一个终端持续发：
+## 起 / 停
 
 ```bash
-ros2 topic pub -r 50 /fmu/in/manual_control_input px4_msgs/msg/ManualControlSetpoint \
-"{valid: true, data_source: 2, roll: 0.0, pitch: 0.0, yaw: 0.0, throttle: -1.0}"
+./scripts/fly.sh start      # 起 PX4+Gazebo、摇杆守护、遥测缓存、网页后端
+./scripts/fly.sh stop       # 全停
 ```
 
-另开终端发解锁：
+## 看（终端里实时显示姿态）
 
 ```bash
-ros2 topic pub --once /fmu/in/vehicle_command px4_msgs/msg/VehicleCommand \
-"{command: 400, param1: 1.0, target_system: 1, target_component: 1, source_system: 1, source_component: 1, from_external: true}"
+./scripts/fly.sh watch      # 实时刷新：模式 / ARMED / 高度 / 横滚 / 俯仰 / 航向 / 速度
+./scripts/fly.sh status     # 打印一行就退出
 ```
 
-`arming_state` 从 1 变 2 就是解锁成功。
+`watch` 的样子（原地刷新，不刷屏）：
 
-## 三、飞（改杆量重新发）
+```
+┌─ 飞行姿态 ─────────────────────────────────────────────┐
+│ 模式  ALTCTL        ● ARMED        高度   1.63 m       │
+│ 横滚   +2.3°  [----------O----------]                  │
+│ 俯仰   -1.8°  [----------O----------]                  │
+│ 航向   128°   水平速度 0.42 m/s   垂直 +0.03 m/s       │
+└────────────────────────────────────────────────────────┘
+```
 
-`ros2 topic pub -r 50` 发的是**恒定值**，想让它动就换一条命令重发：
+## 飞
 
-| 动作 | 改哪个字段 |
+```bash
+./scripts/fly.sh mode ALTCTL     # 切模式（MANUAL/ALTCTL/POSCTL/AUTO/ACRO/OFFBOARD）
+./scripts/fly.sh takeoff         # 解锁并爬到 1.2 m
+./scripts/fly.sh fwd 3           # 前进 3 秒
+./scripts/fly.sh up 2            # 爬升 2 秒
+./scripts/fly.sh left 2          # 左移 2 秒
+./scripts/fly.sh spin 2          # 左转 2 秒
+./scripts/fly.sh land            # 降落并上锁
+```
+
+全部子命令：`mode` `arm` `takeoff` `up` `down` `fwd` `back` `left` `right` `spin` `land` `status` `watch` `start` `stop`
+
+不写秒数默认 2 秒。`takeoff` 默认爬到 1.2 m，可以写 `takeoff 2.0`。
+
+## 它内部到底发了什么
+
+`fly.sh` 只是把这两个话题的命令包了一层：
+
+| 动作 | ROS 话题 |
 |---|---|
-| 爬升 | `throttle: 0.45` |
-| 下降 | `throttle: -0.40` |
-| 悬停 | `throttle: 0.0` |
-| 前进 | `pitch: 0.30` |
-| 后退 | `pitch: -0.30` |
-| 左移 / 右移 | `roll: -0.30` / `roll: 0.30` |
-| 左转 / 右转 | `yaw: 0.40` / `yaw: -0.40` |
+| 切模式 / 解锁 / 上锁 | `/fmu/in/vehicle_command`（`176`=切模式、`400`=解锁上锁） |
+| 爬升 / 前进 / 转向 | `/fmu/in/manual_control_input`，50 Hz 连续发 |
 
-```bash
-# 例：爬升
-ros2 topic pub -r 50 /fmu/in/manual_control_input px4_msgs/msg/ManualControlSetpoint \
-"{valid: true, data_source: 2, roll: 0.0, pitch: 0.0, yaw: 0.0, throttle: 0.45}"
-```
+想看原始命令：`bash -x ./scripts/fly.sh fwd 1`
 
-> **ALTCTL 语义**：油门杆管的是**爬升率**，不是推力；横滚/俯仰杆是**姿态角**。
-> 松杆不会自动回中（`data_source: 2` 走的是 MAVLink 手动通道），飞机会保持当前姿态。
+## 三个设计上的坑（已经处理，但要知道）
 
-## 四、一条命令飞完整流程（推荐）
+**1. 摇杆必须 50 Hz 连续发**
+PX4 超过 0.5 s 收不到手动控制就判失效。所以有个常驻的 `stick_keeper.py`，
+`fly.sh` 只改 `/tmp/stick.json` 里那 4 个数。
 
-手敲 `ros2 topic pub` 只能发恒定值，飞航线需要按时间改杆量，所以写成了脚本：
+**2. 杆量文件 2 秒不更新就回中悬停**
+否则操控脚本被 Ctrl-C 打断，最后一条杆量会一直发下去 ——
+实测油门 0.45 被留在文件里，飞机一口气爬到 17 m。现在过期就回中，最多悬停。
 
-```bash
-python3 scripts/ros_fly_demo.py          # 切模式→解锁→爬升→前进→左移→偏航→降落
-python3 scripts/ros_fly_demo.py --land   # 只降落上锁
-```
+**3. `ros2 topic pub --once` 会丢包**
+每次调用都要新建 ROS 节点，DDS 发现没完成时消息直接丢。
+所以 `pub_cmd` 改成连发 3 次，解锁/上锁还带重试。
 
-实测输出：
+## 为什么是 ALTCTL 不是 OFFBOARD
+
+OFFBOARD + `TrajectorySetpoint` 是 PX4 的自主飞行接口，本机用不了：
 
 ```
-1) 切 ALTCTL
-  切模式     高度 0.14 m   nav_state=1   DISARMED
-2) 解锁
-  解锁       高度 0.14 m   nav_state=1   ARMED
-3) 爬升到约 1.2 m
-  爬升       高度 1.22 m   nav_state=1   ARMED
-4) 前进 3 秒
-  前进       高度 1.35 m   nav_state=1   ARMED
-5) 左移 2 秒
-  左移       高度 1.33 m   nav_state=1   ARMED
-6) 左偏航 2 秒
-  偏航       高度 1.36 m   nav_state=1   ARMED
-7) 降落并上锁
-  完成       高度 0.25 m   nav_state=1   ARMED
+xy_valid: false                          ← 无 GPS，光流给不出水平位置
+WARN [mc_pos_control] invalid setpoints  ← PX4 直接拒
 ```
 
-## 五、为什么不用 OFFBOARD（自主飞行的"标准答案"）
+ALTCTL 的横滚/俯仰杆是**姿态角指令**，不依赖位置估计，所以能飞。
 
-OFFBOARD + `TrajectorySetpoint` 是 PX4 的官方自主飞行接口，给目标点飞控自己闭环。
-**但本机用不了**，实测：
+## 和后端不要同时飞
 
-```bash
-ros2 topic echo /fmu/out/vehicle_local_position --once | grep xy_valid
-# xy_valid: false
-```
-
-无 GPS、只有光流时水平位置估计无效，PX4 直接拒绝：
-
-```
-WARN [mc_pos_control] invalid setpoints
-```
-
-切模式命令发出去了，`nav_state` 仍是 1（没进 14=OFFBOARD）。
-
-**这就是用 ALTCTL 的原因**：它的横滚/俯仰杆是姿态角指令，不依赖位置估计。
-
-如果以后加了 GPS 或视觉里程计，把 `xy_valid` 变成 true，OFFBOARD 就能用：
-
-```bash
-# 持续发这两条（频率 >2 Hz），再切 OFFBOARD(176, param2=6)
-ros2 topic pub -r 20 /fmu/in/offboard_control_mode px4_msgs/msg/OffboardControlMode \
-"{position: true, velocity: false, acceleration: false, attitude: false, body_rate: false}"
-ros2 topic pub -r 30 /fmu/in/trajectory_setpoint px4_msgs/msg/TrajectorySetpoint \
-"{position: [0.0, 0.0, -1.5], velocity: [0.0, 0.0, 0.0], yaw: 0.0}"
-```
-
-## 六、和 Web 界面的关系
-
-两条路**走同一批 ROS 话题**，只是入口不同：
-
-```
-ros2 topic pub ─────────────┐
-                            ├──> /fmu/in/manual_control_input ──> PX4
-浏览器 ──WS──> rc_server ────┘
-                            └──> /fmu/in/vehicle_command ──────> PX4
-```
-
-所以两边**不要同时飞**：`src/flight_ui_cpp` 会一直以 50 Hz 发杆量（默认 `throttle: -1.0`），
-和你的 `ros2 topic pub` 抢同一个话题。用终端飞之前先停掉后端：
-
-```bash
-./scripts/run_show.sh --stop     # 或 kill 掉 rc_server
-```
+`rc_server`（网页后端）也会以 50 Hz 往同一个话题发杆量，两边会打架。
+用终端飞之前先 `./scripts/fly.sh stop`，或者用 `fly.sh start`（它只起后端不抢杆）。
