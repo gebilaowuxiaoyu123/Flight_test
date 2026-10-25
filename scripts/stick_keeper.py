@@ -24,7 +24,10 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 STICK_FILE = '/tmp/stick.json'
 # 过期后发什么：回中 = ALTCTL 里零爬升率 → 悬停。
 # 不能用油门最低（那就是往下掉），更不能沿用上一条杆量（会一直爬）。
-HOVER = dict(roll=0.0, pitch=0.0, yaw=0.0, throttle=0.0)
+HOVER = dict(roll=0.0, pitch=0.0, yaw=0.0, throttle=0.0, valid=True)
+# 暂停：valid=False 让 PX4 知道"没有人在打杆"，
+# 否则它检测到杆量变动会把飞机从 AUTO_LAND 踢回手动模式。
+PAUSED = dict(roll=0.0, pitch=0.0, yaw=0.0, throttle=0.0, valid=False)
 # 文件超过这个时间没更新，就认为"没人操控了"，回中悬停。
 # 没有这条保护时，操控脚本被 Ctrl-C 打断会把最后一条杆量一直发下去
 # —— 实测油门 0.45 被留在文件里，飞机一口气爬到 17 m。
@@ -36,12 +39,15 @@ def read_stick():
         age = time.time() - os.stat(STICK_FILE).st_mtime
         if age > STALE_SEC:
             return dict(HOVER), True       # 过期 → 回中悬停
+        if os.path.getsize(STICK_FILE) == 0:
+            return dict(HOVER), True
         with open(STICK_FILE) as fh:
             d = json.load(fh)
         return dict(roll=float(d.get('roll', 0.0)),
                     pitch=float(d.get('pitch', 0.0)),
                     yaw=float(d.get('yaw', 0.0)),
-                    throttle=float(d.get('throttle', -1.0))), False
+                    throttle=float(d.get('throttle', -1.0)),
+                    valid=bool(d.get('valid', True))), False
     except Exception:
         return dict(HOVER), True
 
@@ -80,7 +86,7 @@ def main():
         msg = ManualControlSetpoint()
         msg.timestamp = node.get_clock().now().nanoseconds // 1000
         msg.timestamp_sample = msg.timestamp
-        msg.valid = True
+        msg.valid = s.get('valid', True)
         msg.data_source = ManualControlSetpoint.SOURCE_MAVLINK_0
         msg.roll = s['roll']
         msg.pitch = s['pitch']

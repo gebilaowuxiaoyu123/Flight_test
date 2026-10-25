@@ -39,6 +39,10 @@ set_stick() {  # set_stick roll pitch yaw throttle
 
 neutral() { set_stick 0 0 0 0; }
 
+pause_sticks() {  # 暂停发杆：让 PX4 自己降落，不被杆量变动打断
+  printf '{"valid": false, "roll": 0, "pitch": 0, "yaw": 0, "throttle": 0}\n' > "${STICK}"
+}
+
 hold() {  # hold <秒> <roll> <pitch> <yaw> <throttle>：期间不断刷新，防止被判过期
   local left="$1"
   set_stick "$2" "$3" "$4" "$5"
@@ -49,19 +53,8 @@ hold() {  # hold <秒> <roll> <pitch> <yaw> <throttle>：期间不断刷新，�
   done
 }
 
-altitude() {  # 优先读遥测缓存（毫秒级），拿不到才退回 ros2 CLI
-  local h
-  h=$(python3 -c "
-import json,time
-try:
-    d=json.load(open('/tmp/telemetry.json'))
-    if time.time()-d.get('t',0)<2: print(f\"{d['alt']:.2f}\")
-except Exception: pass
-" 2>/dev/null)
-  if [ -n "${h}" ]; then echo "${h}"; return; fi
-  timeout 6 ros2 topic echo /fmu/out/vehicle_local_position \
-    --qos-reliability best_effort --once 2>/dev/null \
-    | awk '/^z:/ {printf "%.2f", -$2; exit}'
+altitude() {  # 一次性读高度（约 1 s），不依赖任何常驻缓存
+  python3 "${PROJECT_ROOT}/scripts/tstatus.py" --alt --timeout 1.5 2>/dev/null || true
 }
 
 nav_state() {
@@ -102,6 +95,7 @@ start)
   # 并不断写出过期数据（表现为 status 一直报"数据 N 秒前"）。
   tmux kill-session -t stick 2>/dev/null || true
   tmux kill-session -t tele  2>/dev/null || true
+  rm -f /tmp/telemetry.json
   for p in $(ps -eo pid,args | awk '/scripts\/(stick_keeper|telemetry_watch)\.py/ && !/awk/ {print $1}'); do
     kill -9 "$p" 2>/dev/null || true
   done
@@ -109,19 +103,11 @@ start)
   # 用 tmux 托管：和 agent/sitl 一致，不会随终端退出被回收
   tmux new-session -d -s stick \
     "python3 ${PROJECT_ROOT}/scripts/stick_keeper.py > ${KEEPER_LOG} 2>&1"
-  tmux new-session -d -s tele \
-    "python3 ${PROJECT_ROOT}/scripts/telemetry_watch.py > /tmp/telemetry_watch.log 2>&1"
-  sleep 3
-  age=$(python3 -c "
-import json,time
-try:
-    d=json.load(open('/tmp/telemetry.json')); print(int(time.time()-d.get('t',0)))
-except Exception: print(999)
-" 2>/dev/null)
-  if [ "${age:-999}" -gt 5 ] 2>/dev/null; then
-    warn "遥测缓存没有刷新（${age}s 前）。看: tmux attach -t tele"
+  sleep 2
+  if [ -z "$(python3 "${PROJECT_ROOT}/scripts/tstatus.py" --alt --timeout 1.5 2>/dev/null)" ]; then
+    warn "收不到遥测，检查 tmux attach -t sitl 或 /tmp/flight_sitl.log"
   else
-    log "摇杆守护(50 Hz) + 遥测缓存已启动（tmux: stick / tele）"
+    log "摇杆守护(50 Hz) 已启动（tmux: stick）"
   fi
   # 网页界面（可选，不影响终端飞）
   if curl -fsS --max-time 2 http://127.0.0.1:8000/health >/dev/null 2>&1; then
@@ -149,7 +135,7 @@ stop)
   ;;
 
 status)
-  python3 "${PROJECT_ROOT}/scripts/show_status.py"
+  python3 "${PROJECT_ROOT}/scripts/tstatus.py"
   ;;
 
 watch)
@@ -178,7 +164,7 @@ arm)
   for _ in $(seq 1 8); do        # 冷启动 EKF 收敛要十几秒，多试几次
     pub_cmd 400 1.0 0.0
     sleep 1.5
-    [ "$(arming_state || echo 0)" = "2" ] && break
+    if [ "$(arming_state || echo 0)" = "2" ]; then break; fi
   done
   ./scripts/fly.sh status
   ;;
@@ -191,7 +177,7 @@ takeoff)
   for _ in $(seq 1 8); do        # 冷启动 EKF 收敛要十几秒，多试几次
     pub_cmd 400 1.0 0.0
     sleep 1.5
-    [ "$(arming_state || echo 0)" = "2" ] && break
+    if [ "$(arming_state || echo 0)" = "2" ]; then break; fi
   done
   if [ "$(arming_state || echo 0)" != "2" ]; then
     warn "解锁被拒，PX4 给的原因："
@@ -202,7 +188,7 @@ takeoff)
   for _ in $(seq 1 40); do
     set_stick 0 0 0 0.45
     h=$(altitude)
-    [ -n "${h}" ] && [ "$(echo "${h} >= ${target}" | bc)" = "1" ] && break
+    if [ -n "${h}" ] && [ "$(echo "${h} >= ${target}" | bc)" = "1" ]; then break; fi
     sleep 0.3
   done
   neutral
@@ -216,10 +202,10 @@ up|down|fwd|back|left|right|spin)
   case "$1" in
     up)    hold "${dur}" 0 0 0 0.40 ;;
     down)  hold "${dur}" 0 0 0 -0.40 ;;
-    fwd)   hold "${dur}" 0 0.30 0 0 ;;
-    back)  hold "${dur}" 0 -0.30 0 0 ;;
-    left)  hold "${dur}" -0.30 0 0 0 ;;
-    right) hold "${dur}" 0.30 0 0 0 ;;
+    fwd)   hold "${dur}" 0 0.30 0 0.12 ;;
+    back)  hold "${dur}" 0 -0.30 0 0.12 ;;
+    left)  hold "${dur}" -0.30 0 0 0.10 ;;
+    right) hold "${dur}" 0.30 0 0 0.10 ;;
     spin)  hold "${dur}" 0 0 0.40 0 ;;
   esac
   neutral
@@ -229,31 +215,27 @@ up|down|fwd|back|left|right|spin)
 
 land)
   need_keeper
-  set_stick 0 0 0 -0.45
-  # 每 0.3 s 刷新杆量 + 查高度，最多 40 s
-  for _ in $(seq 1 130); do
-    set_stick 0 0 0 -0.45
-    h=$(altitude)
-    if [ -n "${h}" ] && [ "$(echo "${h} <= 0.20" | bc)" = "1" ]; then
-      break
-    fi
-    sleep 0.3
-  done
-  h=$(altitude)
-  if [ -n "${h}" ] && [ "$(echo "${h} > 0.25" | bc)" = "1" ]; then
-    # 还在空中：绝不发上锁，改回悬停并报错
-    neutral
-    warn "已降到 ${h} m 仍未落地，取消上锁（空中上锁会让飞机直接掉下来）"
-    ./scripts/fly.sh status
-    exit 1
-  fi
-  set_stick 0 0 0 -1
-  sleep 1.5
-  for _ in 1 2 3 4 5; do
-    pub_cmd 400 0.0 0.0
+  # 用 PX4 自带的 NAV_LAND(21)：它自己管下降曲线和落地检测，
+  # 比"手动压油门到底"稳得多（后者触地后会把飞机弹起来，导致上锁被拒）。
+  pause_sticks          # 降落期间别打杆，否则 PX4 会退出 AUTO_LAND
+  pub_cmd 21 0 0
+  for _ in $(seq 1 40); do
     sleep 1
-    [ "$(arming_state || echo 0)" = "1" ] && break
+    a=$(python3 "${PROJECT_ROOT}/scripts/tstatus.py" --armed --timeout 1.2 2>/dev/null || echo -1)
+    if [ "${a}" = "0" ]; then break; fi
   done
+  a=$(python3 "${PROJECT_ROOT}/scripts/tstatus.py" --armed --timeout 1.2 2>/dev/null || echo -1)
+  if [ "${a}" != "0" ]; then
+    h=$(altitude)
+    if [ -n "${h}" ] && [ "$(echo "${h} < 0.6" | bc)" = "1" ]; then
+      # 无 GPS 时高度有漂移，PX4 的落地检测可能永远不触发。
+      # 低空用 force disarm（param2=21196）兜底，高度 <0.6 m 才允许。
+      pub_cmd 400 0.0 21196.0
+      sleep 1
+    else
+      warn "仍在 ${h} m 空中，不做强制上锁"
+    fi
+  fi
   ./scripts/fly.sh status
   ;;
 

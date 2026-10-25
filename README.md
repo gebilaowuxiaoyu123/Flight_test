@@ -34,13 +34,14 @@ ROS 2 + PX4（四旋翼）+ Gazebo Harmonic 的仿真、遥控器界面与感知
 ./scripts/run_sitl_flow.sh
 ```
 
-**只想跑起来 / 飞一飞：**
+**只想跑起来 / 飞一飞（先装一次短命令）：**
 
 ```bash
-./scripts/fly.sh start           # 起仿真 + 后端
-./scripts/fly.sh watch           # 终端实时看姿态
-./scripts/fly.sh takeoff         # 解锁并爬到 1.2 m
-./scripts/fly.sh land            # 降落上锁
+./scripts/install_aliases.sh     # 之后重开终端
+flight                           # 起整条链路
+tele                             # 终端实时看姿态
+fly takeoff                      # 解锁并爬到 1.2 m
+fly land                         # 降落上锁
 ```
 
 **想录演示视频：**

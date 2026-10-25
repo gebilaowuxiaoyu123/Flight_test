@@ -4,16 +4,29 @@
 
 ## 起 / 停
 
+先装一次短命令（写入 `~/.bashrc`）：
+
 ```bash
-./scripts/fly.sh start      # 起 PX4+Gazebo、摇杆守护、遥测缓存、网页后端
-./scripts/fly.sh stop       # 全停
+./scripts/install_aliases.sh     # 装完 source ~/.bashrc 或重开终端
 ```
+
+之后：
+
+| 命令 | 等价于 | 作用 |
+|---|---|---|
+| `flight` | `ros2 launch flight_ui flight.launch.py` | 起整条链路（DDS 桥 + PX4/Gazebo + 摇杆守护 + Web 后端） |
+| `remote` | `ros2 launch flight_ui remote.launch.py` | 只起 Web 遥控器后端（仿真已在跑时用） |
+| `fly <动作>` | `./scripts/fly.sh <动作>` | 终端飞 |
+| `tele` | `./scripts/fly.sh watch` | 终端实时看姿态 |
+| `flystatus` | `./scripts/fly.sh status` | 一行状态 |
+
+`flight` 是前台进程，`Ctrl-C` 就全停。不想用别名也可以直接跑 `./scripts/fly.sh start` / `stop`。
 
 ## 看（终端里实时显示姿态）
 
 ```bash
-./scripts/fly.sh watch      # 实时刷新：模式 / ARMED / 高度 / 横滚 / 俯仰 / 航向 / 速度
-./scripts/fly.sh status     # 打印一行就退出
+tele            # 实时刷新：模式 / ARMED / 高度 / 横滚 / 俯仰 / 航向 / 速度
+flystatus       # 打印一行就退出（约 1 秒，不依赖任何缓存进程）
 ```
 
 `watch` 的样子（原地刷新，不刷屏）：
@@ -36,7 +49,9 @@
 | `agent` | MicroXRCEAgent（PX4 ↔ ROS 2 的 DDS 桥） |
 | `sitl` | PX4 + Gazebo |
 | `stick` | 摇杆守护（50 Hz 补发） |
-| `tele` | 遥测缓存（`status` / `watch` 都读它） |
+
+`status` / `watch` 都是自己起一个短命 ROS 节点直接读话题，不依赖常驻缓存，
+所以没有"缓存过期"这类问题。
 
 ```bash
 tmux attach -t tele      # 看遥测守护有没有在收数据；Ctrl-b d 退出
@@ -45,13 +60,13 @@ tmux attach -t tele      # 看遥测守护有没有在收数据；Ctrl-b d 退�
 ## 飞
 
 ```bash
-./scripts/fly.sh mode ALTCTL     # 切模式（MANUAL/ALTCTL/POSCTL/AUTO/ACRO/OFFBOARD）
-./scripts/fly.sh takeoff         # 解锁并爬到 1.2 m
-./scripts/fly.sh fwd 3           # 前进 3 秒
-./scripts/fly.sh up 2            # 爬升 2 秒
-./scripts/fly.sh left 2          # 左移 2 秒
-./scripts/fly.sh spin 2          # 左转 2 秒
-./scripts/fly.sh land            # 降落并上锁
+fly mode ALTCTL     # 切模式（MANUAL/ALTCTL/POSCTL/AUTO/ACRO/OFFBOARD）
+fly takeoff         # 解锁并爬到 1.2 m
+fly fwd 3           # 前进 3 秒
+fly up 2            # 爬升 2 秒
+fly left 2          # 左移 2 秒
+fly spin 2          # 左转 2 秒
+fly land            # 降落并上锁（用 PX4 的 NAV_LAND，低空 force disarm 兜底）
 ```
 
 全部子命令：`mode` `arm` `takeoff` `up` `down` `fwd` `back` `left` `right` `spin` `land` `status` `watch` `start` `stop`
@@ -82,6 +97,14 @@ PX4 超过 0.5 s 收不到手动控制就判失效。所以有个常驻的 `stic
 **3. `ros2 topic pub --once` 会丢包**
 每次调用都要新建 ROS 节点，DDS 发现没完成时消息直接丢。
 所以 `pub_cmd` 改成连发 3 次，解锁/上锁还带重试。
+
+**4. 降落时不能再打杆**
+PX4 检测到杆量变动会从 `AUTO_LAND` 踢回手动模式，结果就是降不下来。
+所以 `land` 会先把杆量置为 `valid: false`（暂停发杆），让 PX4 自己降。
+
+**5. 无 GPS 时 PX4 的落地检测常常不触发**
+高度估计有几十厘米漂移，PX4 以为还在空中，永远不自动上锁。
+所以低空（<0.6 m）时用 force disarm（`param2 = 21196`）兜底。
 
 ## 为什么是 ALTCTL 不是 OFFBOARD
 
