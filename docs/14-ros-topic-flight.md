@@ -15,12 +15,17 @@
 | 命令 | 等价于 | 作用 |
 |---|---|---|
 | `flight` | `ros2 launch flight_ui flight.launch.py` | 起整条链路（DDS 桥 + PX4/Gazebo + 摇杆守护 + Web 后端） |
+| `flight start` | `./scripts/fly.sh start` | 同上一行，但后台跑（tmux 托管），Ctrl-C 不会全停 |
+| `flight <动作>` | `./scripts/fly.sh <动作>` | 17 个动作随便接：`status` `gui` `logs` `takeoff` `fwd 2` … |
 | `remote` | `ros2 launch flight_ui remote.launch.py` | 只起 Web 遥控器后端（仿真已在跑时用） |
 | `fly <动作>` | `./scripts/fly.sh <动作>` | 终端飞 |
 | `tele` | `./scripts/fly.sh watch` | 终端实时看姿态 |
 | `flystatus` | `./scripts/fly.sh status` | 一行状态 |
 
-`flight` 是前台进程，`Ctrl-C` 就全停。不想用别名也可以直接跑 `./scripts/fly.sh start` / `stop`。
+`flight` 不带参数是前台进程，`Ctrl-C` 就全停；带 `<动作>` 时转给 `fly.sh`，后台 tmux 托管。
+不想用短命令也可以直接跑 `./scripts/fly.sh start` / `stop`。
+
+定义都在 `scripts/flight_env.sh`，`~/.bashrc` 里只留一行 `source`，改命令不用再动 `.bashrc`。
 
 ## 看（终端里实时显示姿态）
 
@@ -121,3 +126,21 @@ ALTCTL 的横滚/俯仰杆是**姿态角指令**，不依赖位置估计，所�
 
 `rc_server`（网页后端）也会以 50 Hz 往同一个话题发杆量，两边会打架。
 用终端飞之前先 `./scripts/fly.sh stop`，或者用 `fly.sh start`（它只起后端不抢杆）。
+
+## 短命令报错怎么修
+
+**`source ~/.bashrc` 报 `未预期的记号 "(" 附近有语法错误`**
+
+老版本把 `flight` 定义成 alias。bash 解析 `flight() {` 时会先把函数名当命令名做 alias 展开，
+变成 `ros2 launch ...() {` → 语法错误，而且**后面的定义全不执行**，于是 `flight start` 一直报
+`malformed launch argument 'start'`，每次都失败。
+
+修（`flight_env.sh` 开头已经加了 `unalias`，重装即可自愈）：
+
+```bash
+unalias flight remote 2>/dev/null; source ~/.bashrc
+```
+
+**改完命令为什么不生效**
+
+`.bashrc` 只在开新终端时才读。已经开着的终端要手动 `source ~/.bashrc`。
