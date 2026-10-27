@@ -14,7 +14,7 @@
 | 后端 | 语言 | 位置 | 用途 |
 |---|---|---|---|
 | Python 版 | FastAPI + uvicorn | `src/flight_ui/flight_ui/` | 最初跑通的版本，**用来对照读** |
-| C++ 版 | rclcpp + Boost.Beast | `src/flight_ui_cpp/src/rc_server.cpp` | 当前主力，单文件 729 行 |
+| C++ 版 | rclcpp + Boost.Beast | `src/flight_ui_cpp/` | 当前主力，6 个编译单元 |
 | 参考实现 | rclcpp，多文件 | 只在 git 历史 `a18ed7d` 里 | 不想看的话可以无视 |
 
 ### 主干文件
@@ -25,9 +25,21 @@ src/flight_ui/web/            ← 前端（370 行，先读这个）
 ├── index.html     43 行      骨架
 └── style.css     127 行      样式
 
-src/flight_ui_cpp/
-├── src/rc_server.cpp  729 行  ← C++ 后端全部逻辑
-└── CMakeLists.txt      57 行
+src/flight_ui_cpp/            ← C++ 后端（一个文件一件事）
+├── include/flight_ui_cpp/
+│   ├── shared_state.hpp   187 行  跨线程状态 + 两把锁 + 控制权租约
+│   ├── mode_tables.hpp        模式名 ↔ 编号（两张表）
+│   ├── command_sequence.hpp   解锁/起飞/降落时序
+│   ├── http_util.hpp      json/读文件/MIME
+│   ├── ws_session.hpp     WebSocket 会话
+│   └── http_server.hpp    HTTP 连接分发
+└── src/
+    ├── main.cpp          159 行  装配 + 订阅 + 定时器 + accept 线程
+    ├── mode_tables.cpp    39 行
+    ├── command_sequence.cpp 122 行
+    ├── http_util.cpp      37 行
+    ├── ws_session.cpp    205 行  主循环：读一帧 → 改状态/发命令 → 回 ack
+    └── http_server.cpp    98 行
 
 scripts/                      ← 运维脚本
 ├── run_show.sh          一条命令起录制链路（本机实测可用）
@@ -74,19 +86,17 @@ scripts/                      ← 运维脚本
 {"type":"ack", "action":.., "ok":.., "message":..}
 ```
 
-### 第 2 步：`rc_server.cpp` 的骨架（只读 6 个函数）
+### 第 2 步：C++ 后端的骨架（按文件读，一个文件一件事）
 
-按行号从上往下，跳过所有 HTTP/WebSocket 细节：
-
-| 行 | 函数 | 一句话 |
+| 文件 | 关键内容 | 一句话 |
 |---|---|---|
-| 45 | `modeNameOf` | `nav_state`(读数) → 模式名，给 HUD 显示 |
-| 70 | `mainModeOf` | 模式名 → **主模式号**，发命令用。**这两张表不是同一套编号** |
-| 82 | `class SharedState` | 全部跨线程数据 + 两把锁 + 控制权租约 |
-| 268 | `sendCommand` | 填 `VehicleCommand` 的唯一入口 |
-| 307–374 | `ensureManualMode` / `armWithRetry` / `takeoffSequence` / `landNow` / `killNow` | 命令时序 |
-| 377 | `serveWebSocket` | 主循环：读一帧 → 更新/发命令 → 回 ack |
-| 615 | `main` | 建订阅/发布者/定时器，起 HTTP 线程 |
+| `mode_tables.cpp` | `modeNameOf` / `mainModeOf` | `nav_state`(读数) → 模式名；模式名 → **主模式号**。**两张表不是同一套编号** |
+| `shared_state.hpp` | `class SharedState` | 全部跨线程数据 + 两把锁 + 控制权租约 + 遥测新鲜度 |
+| `command_sequence.cpp` | `sendCommand` / `ensureManualMode` / `armWithRetry` / `takeoffSequence` / `landNow` / `killNow` | PX4 命令时序（解锁重试、起飞、降落兜底） |
+| `ws_session.cpp` | `serveWebSocket` | 主循环：读一帧 JSON → 更新状态/发命令 → 回 ack |
+| `http_server.cpp` | `handleConnection` | 每连接一线程：WebSocket 升级 or 静态文件 / `/health` |
+| `http_util.cpp` | `jsonString` / `readFile` / `contentTypeOf` | 小工具 |
+| `main.cpp` | `main` | 装配订阅/发布者/定时器，起 accept 线程 |
 
 ### 第 3 步：`SharedState` 是全场唯一要小心的地方
 

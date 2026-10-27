@@ -15,7 +15,14 @@ find_package(Boost REQUIRED COMPONENTS system thread)
 # JSON 用 jsoncpp（JsonCpp::JsonCpp 会自动带上 /usr/include/jsoncpp）
 find_package(jsoncpp REQUIRED)
 
-add_executable(rc_server src/rc_server.cpp)
+# 拆成 6 个编译单元（SharedState 是 header-only，定义在 include/flight_ui_cpp/shared_state.hpp）：每个文件只干一件事（对照 RMCS 的"一个组件一件事"）
+add_executable(rc_server
+  src/main.cpp
+  src/mode_tables.cpp
+  src/command_sequence.cpp
+  src/http_util.cpp
+  src/ws_session.cpp
+  src/http_server.cpp)
 target_include_directories(rc_server PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
