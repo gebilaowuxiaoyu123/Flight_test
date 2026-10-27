@@ -199,6 +199,8 @@ stop)
     kill "$p" 2>/dev/null || true
   done
   for s in agent sitl stick gzgui web cams; do tmux kill-session -t "$s" 2>/dev/null || true; done
+  # flight link 是前台起的 agent，没有 tmux 会话，得按进程名收
+  kill_by_cmd '[M]icroXRCEAgent'
   for p in $(ps -eo pid,args | awk '/gz sim -g/ && !/awk/ {print $1}'); do
     kill -9 "$p" 2>/dev/null || true
   done

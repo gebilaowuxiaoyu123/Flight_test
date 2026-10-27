@@ -61,6 +61,16 @@ export PX4_PARAM_COM_DISARM_PRFLT=0
 export PX4_PARAM_SDLOG_MODE="${PX4_PARAM_SDLOG_MODE:--1}"
 export GZ_SIM_RESOURCE_PATH="${PROJECT_ROOT}/px4_overlay/models:${GZ_SIM_RESOURCE_PATH:-}"
 
+# PX4 的 pxh 命令行在 stdin 读到 EOF 时会疯狂重绘提示符：
+# 实测把输出重定向到文件时 40 s 写了 276 MB（tmp 被吃满）。
+# 非 tty 时挂一个"永不 EOF"的 fd 当 stdin，read 就会一直阻塞。
+if [ ! -t 0 ]; then
+  PX4_STDIN_FIFO="$(mktemp -u /tmp/px4_stdin.XXXXXX)"
+  if mkfifo "${PX4_STDIN_FIFO}" 2>/dev/null && exec 0<> "${PX4_STDIN_FIFO}"; then
+    rm -f "${PX4_STDIN_FIFO}"
+  fi
+fi
+
 log "启动 ${MODEL}（airframe ${PX4_SYS_AUTOSTART}，${HEADLESS_DESC}）..."
 if [ "${PX4_PARAM_SDLOG_MODE}" = "-1" ]; then
   log "ulog 黑匣子已关闭（想开：PX4_PARAM_SDLOG_MODE=0 ./scripts/fly.sh sim）"
