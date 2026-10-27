@@ -155,10 +155,13 @@ raise_windows() {
   done
 }
 
-# 停掉某类进程（按命令行正则匹配，不含自己）
+# 停掉某类进程（按命令行正则匹配）
+# 必须排除自己和父进程：调用方的命令行里往往也含同样的字符串
+# （bash -c "ps ... | grep px4_sitl_default/bin/px4"），不排除就会自杀。
 kill_by_cmd() {
   local pat="$1" sig="${2:--TERM}" p
-  for p in $(ps -eo pid,args | awk -v pat="${pat}" '$0 ~ pat && !/awk/ {print $1}'); do
+  for p in $(ps -eo pid,args | awk -v pat="${pat}" -v self="$$" -v parent="${PPID}" \
+             '$1 != self && $1 != parent && $0 ~ pat && !/awk/ {print $1}'); do
     kill "${sig}" "${p}" 2>/dev/null || true
   done
 }
@@ -213,27 +216,17 @@ start)
 stop)
   log "停止 ..."
   for s in stick tele; do tmux kill-session -t "$s" 2>/dev/null || true; done
-  for p in $(ps -eo pid,args | awk '/scripts\/(stick_keeper|telemetry_watch|view3|link_monitor)\.py|flight_ui_cpp\/rc_server|flight_perception_cpp\/(min_depth|optical_flow_logger)/ && !/awk/ {print $1}'); do
-    kill "$p" 2>/dev/null || true
-  done
+  kill_by_cmd 'scripts/(stick_keeper|telemetry_watch|view3|link_monitor)\.py|flight_ui_cpp/rc_server|flight_perception_cpp/(min_depth|optical_flow_logger)'
   for s in agent sitl stick gzgui web cams depthbridge; do tmux kill-session -t "$s" 2>/dev/null || true; done
   # flight link 是前台起的 agent，没有 tmux 会话，得按进程名收
   kill_by_cmd '[M]icroXRCEAgent'
-  for p in $(ps -eo pid,args | awk '/gz sim -g/ && !/awk/ {print $1}'); do
-    kill -9 "$p" 2>/dev/null || true
-  done
+  kill_by_cmd 'gz sim -g' -9
   # 浏览器也关掉（想留着看网页可加 --keep-browser）
   if [ "${2:-}" != "--keep-browser" ]; then
-    for p in $(ps -eo pid,args | awk '/snap\/firefox.*--no-remote/ && !/awk/ {print $1}'); do
-      kill "$p" 2>/dev/null || true
-    done
-    for p in $(ps -eo pid,args | awk '/Xephyr :1/ && !/awk/ {print $1}'); do
-      kill "$p" 2>/dev/null || true
-    done
+    kill_by_cmd 'snap/firefox.*--no-remote'
+    kill_by_cmd 'Xephyr :1'
   fi
-  for p in $(ps -eo pid,cmd | awk '/px4_sitl_default\/bin\/px4|gz sim/ && !/awk/ {print $1}'); do
-    kill -9 "$p" 2>/dev/null || true
-  done
+  kill_by_cmd 'px4_sitl_default/bin/px4|gz sim' -9
   log "已停止"
   ;;
 
