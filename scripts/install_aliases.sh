@@ -32,30 +32,59 @@ PY
 
 remove_block
 if [ "${1:-}" == "--remove" ]; then
-  echo "已从 ${BASHRC} 移除 flight_project 别名"
+  echo "已从 ${BASHRC} 移除 flight_project 短命令"
   exit 0
 fi
 
-cat >> "${BASHRC}" <<EOF
-${MARK_BEGIN}
+cat >> "${BASHRC}" <<'EOF'
+# >>> flight_project >>>
 # ---- flight_project 短命令 ----
-export FLIGHT_ROOT="${ROOT}"
+export FLIGHT_ROOT="/home/wiki_wu/flight_project"
+
 _flight_env() {
   source /opt/ros/humble/setup.bash 2>/dev/null
-  source "\${FLIGHT_ROOT}/install/setup.bash" 2>/dev/null
+  source "${FLIGHT_ROOT}/install/setup.bash" 2>/dev/null
 }
-alias flight='_flight_env && ros2 launch flight_ui flight.launch.py'
-alias remote='_flight_env && ros2 launch flight_ui remote.launch.py'
-alias fly='\${FLIGHT_ROOT}/scripts/fly.sh'
-alias tele='\${FLIGHT_ROOT}/scripts/fly.sh watch'
-alias flystatus='\${FLIGHT_ROOT}/scripts/fly.sh status'
-${MARK_END}
+
+# flight 同时支持两种用法：
+#   flight                     起整条链路（ros2 launch）
+#   flight start / stop / gui  等价于 fly start / stop / gui
+#   flight headless:=false     参数原样传给 ros2 launch
+flight() {
+  local sub="${1:-}"
+  case "${sub}" in
+    ''|launch)
+      _flight_env
+      ros2 launch flight_ui flight.launch.py "${@:2}"
+      ;;
+    start|stop|status|watch|gui|logs|mode|arm|takeoff|up|down|fwd|back|left|right|spin|land)
+      "${FLIGHT_ROOT}/scripts/fly.sh" "$@"
+      ;;
+    *':='*)
+      _flight_env
+      ros2 launch flight_ui flight.launch.py "$@"
+      ;;
+    -h|--help|help)
+      echo "用法："
+      echo "  flight                      起整条链路"
+      echo "  flight start|stop|gui|...   等价于 fly <动作>"
+      echo "  flight headless:=false      参数传给 ros2 launch"
+      ;;
+    *)
+      echo "未知参数: ${sub}"
+      echo "想看用法: flight help"
+      return 1
+      ;;
+  esac
+}
+
+remote() {
+  _flight_env
+  ros2 launch flight_ui remote.launch.py "$@"
+}
+alias fly='${FLIGHT_ROOT}/scripts/fly.sh'
+alias tele='${FLIGHT_ROOT}/scripts/fly.sh watch'
+alias flystatus='${FLIGHT_ROOT}/scripts/fly.sh status'
+# <<< flight_project <<<
 EOF
-echo "已写入 ${BASHRC}："
-echo "  flight      起整条链路（= ros2 launch flight_ui flight.launch.py）"
-echo "  remote      只起 Web 遥控器后端"
-echo "  fly <动作>  终端飞：fly start / fly takeoff / fly land / fly fwd 3"
-echo "  tele        终端实时看姿态"
-echo "  flystatus   一行状态"
-echo
-echo "生效： source ${BASHRC}   或重开终端"
+echo "已写入 ${BASHRC}"
