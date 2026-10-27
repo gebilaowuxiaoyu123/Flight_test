@@ -261,6 +261,13 @@ sim)
 remote)
   # 网页遥控：后端日志直接打在这个终端，后端通了再开浏览器
   kill_by_cmd '[f]light_ui_cpp/rc_server'
+  # rc_server 和 stick_keeper 都往 /fmu/in/manual_control_input 发 50 Hz 杆量，
+  # 同时跑会互相覆盖（表现为网页打杆飞机不动）。网页接管时必须停掉守护。
+  if pgrep -f 'stick_keeper.py' >/dev/null 2>&1; then
+    tmux kill-session -t stick 2>/dev/null || true
+    kill_by_cmd '[s]tick_keeper.py'
+    log "   已停掉终端摇杆守护 → 控制权交给网页（要回终端飞：flight stop && flight start）"
+  fi
   sleep 1
   log "③ 网页遥控  rc_server :8000"
   ros2 launch flight_ui remote.launch.py &

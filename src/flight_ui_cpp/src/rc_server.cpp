@@ -30,6 +30,7 @@
 #include <cmath>
 
 #include <mutex>
+#include <set>
 #include <utility>
 #include <memory>
 
@@ -103,9 +104,16 @@ public:
         last_update_ = std::chrono::steady_clock::now();
     }
 
+    void attachClient(uint64_t client)              // 网页连上：从此"有人在控"
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        attached_.insert(client);
+    }
+
     void releaseClient(uint64_t client)             // 连接断开时交还控制权
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        attached_.erase(client);
         if (client_ == client) {
             client_ = 0;
             deadman_ = false;
@@ -113,7 +121,8 @@ public:
     }
 
     struct Control {                                // 定时器要用的一份完整快照
-        bool valid;
+        bool valid;                                 // 真按着使能（杆量可用）
+        bool any_client;                            // 是否还有网页连着
         double roll, pitch, yaw, throttle;
     };
 
@@ -123,7 +132,8 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         const double age = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - last_update_).count();
-        return {deadman_ && age < 0.3, roll_, pitch_, yaw_, throttle_stick_};
+        return {deadman_ && age < 0.3, !attached_.empty(),
+                roll_, pitch_, yaw_, throttle_stick_};
     }
 
     // 写：PX4 遥测进来。拆成 3 个 setter，因为三个回调各只知道一部分字段
@@ -212,7 +222,8 @@ private:
     mutable std::mutex mutex_;
     mutable std::mutex telemetry_mutex_;
     uint64_t client_ = 0;            // 当前持有控制权的连接 id（0 = 没人）
-    bool deadman_ = false;
+    std::set<uint64_t> attached_;    // 还连着的网页（含只旁观的）
+    bool deadman_ = true;
     double roll_ = 0.0;
     double pitch_ = 0.0;
     double yaw_ = 0.0;
@@ -340,6 +351,9 @@ void armSequence(SharedState & state, rclcpp::Node * node,
 {
     ensureManualMode(state, node, cmd_pub);
     if (!armWithRetry(state, node, cmd_pub)) {
+        RCLCPP_WARN(rclcpp::get_logger("flight_ui"),
+                    "[arm] 解锁被拒：检查 PX4 终端里的 Preflight Fail 原因"
+                    "（EKF 未收敛 / 机体倾斜 / 电池）");
         sendCommand(cmd_pub, nowUs(node), 400, 0.0F);          // 失败就确保留在上锁状态
     }
 }
@@ -351,6 +365,8 @@ void takeoffSequence(SharedState & state, rclcpp::Node * node,
 {
     ensureManualMode(state, node, cmd_pub);
     if (!state.armed() && !armWithRetry(state, node, cmd_pub)) {
+        RCLCPP_WARN(rclcpp::get_logger("flight_ui"),
+                    "[takeoff] 解锁被拒，不起飞；看 PX4 终端里的 Preflight Fail 原因");
         return;                                                // 解锁失败就别硬起飞
     }
     sleepMs(300);
@@ -392,9 +408,9 @@ void serveWebSocket(beast::tcp_stream stream,
     // 用文本帧。不设的话默认二进制帧，浏览器收到 Blob，前端 JSON.parse 会失败
     ws.text(true);
 
+    state.attachClient(client_id);
     RCLCPP_INFO(rclcpp::get_logger("flight_ui"),
-                "[WS] 浏览器 #%lu 已连接（当前控制权归它）",
-                static_cast<unsigned long>(client_id));
+                "[WS] 浏览器 #%lu 已连接", static_cast<unsigned long>(client_id));
 
     // ---- 写串行化 + 独立遥测推送 ----
     // Beast 同步流规则：同一连接允许 1 读 + 1 写并发，但绝不能 2 个写者。
@@ -489,16 +505,22 @@ void serveWebSocket(beast::tcp_stream stream,
                 Json::Value ack(Json::objectValue);
                 ack["type"] = "ack";
                 ack["action"] = type;
-                if (!control.valid) {
-                    ack["ok"] = false;
-                    ack["message"] = "deadman not held";
-                } else if (control.throttle > -0.8) {
+
+                // 解锁/起飞是"命令"，不该因为没按使能就什么都不做
+                // （旧逻辑直接回 "deadman not held"，用户按了起飞却毫无反应）。
+                // PX4 只要求两件事：有有效的遥控信号 + 油门在最低。
+                // 没按使能 → 这里把杆量临时置成"回中 + 油门最低"，既满足解锁条件，
+                // 又不会让飞机带着偏杆起飞。
+                if (control.valid && control.throttle > -0.8) {
+                    // 按着使能却把油门推上去了：这时候解锁会直接蹿起来，拒掉
                     ack["ok"] = false;
                     ack["message"] = "throttle must be at minimum";
                 } else {
+                    if (!control.valid) {
+                        state.setSticks(client_id, true, 0.0, 0.0, 0.0, -1.0);
+                    }
                     ack["ok"] = true;
-                    ack["message"] = want_takeoff
-                        ? "takeoff requested" : "arm requested";
+                    ack["message"] = want_takeoff ? "takeoff requested" : "arm requested";
                     // 解锁/起飞要重试最长 10 秒，绝不能堵在这个读循环里
                     if (want_takeoff) {
                         std::thread(takeoffSequence, std::ref(state), node,
@@ -674,18 +696,30 @@ int main(int argc, char ** argv)   // 装配 + spin
     // 50 Hz：先从 state 取一份加锁快照，再在锁外发布
     auto control_timer = node->create_wall_timer(std::chrono::milliseconds(20), [&]() {
         const auto c = state.control();
+        const bool armed = state.armed();
+
+        // valid 表示"有人在管这架飞机"。PX4 用 valid=false 判定遥控丢失，
+        // 会把未经使能的帧当成"没有遥控器"→ 直接拒绝解锁。
+        // 所以只要还有网页连着就报 valid=true；deadman 只决定杆量传不传下去：
+        //   没按使能 → 杆量回中；油门给"最低"（没解锁）或"中位悬停"（已解锁）。
+        const bool has_pilot = c.any_client;
+        const float roll  = c.valid ? static_cast<float>(c.roll)  : 0.0F;
+        const float pitch = c.valid ? static_cast<float>(c.pitch) : 0.0F;
+        const float yaw   = c.valid ? static_cast<float>(c.yaw)   : 0.0F;
+        const float thr   = c.valid ? static_cast<float>(c.throttle)
+                                    : (armed ? 0.0F : -1.0F);
 
         px4_msgs::msg::ManualControlSetpoint msg;
         msg.timestamp = static_cast<uint64_t>(node->get_clock()->now().nanoseconds() / 1000);
         msg.timestamp_sample = msg.timestamp;
-        msg.valid = c.valid;
+        msg.valid = has_pilot;
         msg.data_source = px4_msgs::msg::ManualControlSetpoint::SOURCE_MAVLINK_0; // 2
-        msg.roll = static_cast<float>(c.roll);
-        msg.pitch = static_cast<float>(c.pitch);
-        msg.yaw = static_cast<float>(c.yaw);
-        msg.throttle = static_cast<float>(c.throttle);
+        msg.roll = roll;
+        msg.pitch = pitch;
+        msg.yaw = yaw;
+        msg.throttle = thr;
         msg.flaps = 0.0F;
-        msg.sticks_moving = std::abs(c.roll) > 0.02 || std::abs(c.pitch) > 0.02;
+        msg.sticks_moving = std::abs(roll) > 0.02F || std::abs(pitch) > 0.02F;
         msg.buttons = 0;
 
         manual_pub->publish(msg);

@@ -183,3 +183,28 @@ df -h /                # 确认
 
 现在 `run_sitl_combined.sh` 默认 `PX4_PARAM_SDLOG_MODE=-1`（关闭黑匣子），
 不会再涨。真要留日志：`PX4_PARAM_SDLOG_MODE=0 flight sim`。
+
+## 网页遥控：为什么"点了起飞没反应"
+
+三个原因，都已修好，遇到旧版本时按这三条自查：
+
+**1. 起飞不用按使能，但打杆必须按住「按住使能」**
+- 起飞/解锁：后端会自动把杆量置成"回中 + 油门最低"，直接飞 `NAV_TAKEOFF`
+- 打杆：不按「按住使能」时杆量被强制回中（安全设计），飞机会悬停不理会你
+
+**2. 网页和终端摇杆守护不能同时开**
+两者都以 50 Hz 往 `/fmu/in/manual_control_input` 发杆量，会互相覆盖，
+表现为"网页打杆飞机不动"。`flight remote` 现在会自动停掉 `stick_keeper`；
+要回终端飞就 `flight stop` 再 `flight start`。
+
+**3. PX4 必须看到"有效遥控信号"才允许解锁**
+后端只在**有网页连着**时才发 `valid=true`；没有网页时 PX4 认为遥控丢失，
+会拒绝解锁。所以先开网页再点起飞。
+
+排查命令：
+
+```bash
+ros2 topic info /fmu/in/manual_control_input -v   # Publisher count 必须是 1
+flight status                                     # 模式/解锁/高度
+flight logs sitl                                  # PX4 里的 Preflight Fail 原因
+```
