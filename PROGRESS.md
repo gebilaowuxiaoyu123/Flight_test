@@ -108,3 +108,17 @@ colcon build --packages-select flight_ui_cpp flight_perception_cpp \
 ros2 run flight_ui_cpp rc_server          # 占用 8000，先停掉 python 版 ui
 python3 scripts/ws_smoke_test.py          # 同一套黑盒验收
 ```
+
+## 四终端控制台（当前日常用法）
+
+```bash
+flight link      # ① 通信连接（MicroXRCEAgent + 节点清单 + 话题频率）
+flight sim       # ② 仿真（PX4 + Gazebo 3D 窗口）
+flight remote    # ③ 网页遥控（后端日志 + 自动开浏览器）
+flight views     # ④ 三视角（第一人称 / 第三人称 / 俯视）
+```
+
+`flight stop` 一次收掉全部（含 `flight link` 的 agent、相机桥、三视角窗口）。
+
+**磁盘**：PX4 黑匣子会涨到十几 G 吃满根分区，已默认关闭（`PX4_PARAM_SDLOG_MODE=-1`），
+手动清：`flight clean` / `flight clean --all`。
