@@ -142,6 +142,19 @@ public:
         std::lock_guard<std::mutex> lock(telemetry_mutex_);
         armed_ = armed;
         nav_state_ = nav_state;
+        last_status_ = std::chrono::steady_clock::now();
+    }
+
+    // 遥测多久没来了（秒）。用来识别"ROS 链路根本没通"：
+    // 没起 MicroXRCEAgent 时 /fmu/* 话题一条都没有，命令发出去也没人收。
+    double statusAgeSec() const
+    {
+        std::lock_guard<std::mutex> lock(telemetry_mutex_);
+        if (last_status_.time_since_epoch().count() == 0) {
+            return 1e9;
+        }
+        return std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - last_status_).count();
     }
 
     void setPosition(bool z_valid, double z, double ref_alt)   // 来自 vehicle_local_position
@@ -232,6 +245,7 @@ private:
 
     bool armed_ = false;
     int nav_state_ = -1;
+    std::chrono::steady_clock::time_point last_status_{};
     bool z_valid_ = false;
     double z_ = 0.0;
     double ref_alt_ = std::nan("");
@@ -456,6 +470,22 @@ void serveWebSocket(beast::tcp_stream stream,
             // 别的命令（arm/mode/takeoff…）没有 deadman 字段，
             // 若不判断类型会读到默认值 false，等于把使能松开 → 解锁必然被拒。
                         const std::string type = root.get("type", "").asString();
+
+            // 命令类消息先确认 ROS 链路是通的。
+            // 没起 MicroXRCEAgent 时 /fmu/* 一个话题都没有，命令发出去没人收，
+            // 用户看到的现象就是"点了 ARM/TAKEOFF 毫无反应"。
+            if (type != "sticks" && !type.empty() && state.statusAgeSec() > 1.5) {
+                Json::Value ack(Json::objectValue);
+                ack["type"] = "ack";
+                ack["action"] = type;
+                ack["ok"] = false;
+                ack["message"] = "没有遥测：ROS 链路没通，先跑 flight link（起 MicroXRCEAgent）";
+                send_text(jsonString(ack));
+                RCLCPP_WARN(rclcpp::get_logger("flight_ui"),
+                            "[cmd] 收到 %s 但 %.1f s 没遥测，已忽略：ROS 链路没通",
+                            type.c_str(), state.statusAgeSec());
+                continue;
+            }
 
             if (type == "sticks") {
                 state.setSticks(client_id,

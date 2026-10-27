@@ -98,6 +98,23 @@ CAM_TOPICS=(
   "/world/flow/model/cam_top/link/link/sensor/top_cam/image@sensor_msgs/msg/Image@gz.msgs.Image"
 )
 
+# MicroXRCEAgent = PX4 和 ROS 2 之间的 DDS 桥。没有它，/fmu/* 话题一条都不存在，
+# 网页上点 ARM/TAKEOFF 会像"没反应"一样（命令发出去没人收）。
+ensure_agent() {
+  if pgrep -f 'MicroXRCEAgent' >/dev/null 2>&1; then
+    log "① 通信链路已在跑（MicroXRCEAgent）"
+    return
+  fi
+  tmux has-session -t agent 2>/dev/null || \
+    tmux new-session -d -s agent "MicroXRCEAgent udp4 -p 8888 > /tmp/flight_agent.log 2>&1"
+  sleep 2
+  if pgrep -f 'MicroXRCEAgent' >/dev/null 2>&1; then
+    log "① 通信链路已自动启动（没跑 flight link 时兜底；想看日志用 flight link）"
+  else
+    warn "MicroXRCEAgent 起不来，看 /tmp/flight_agent.log（msg 会发不出去）"
+  fi
+}
+
 open_browser() {
   if pgrep -f 'snap/firefox.*--no-remote' >/dev/null 2>&1; then
     log "浏览器已在运行"
@@ -245,6 +262,7 @@ link)
   ;;
 
 sim)
+  ensure_agent
   tmux kill-session -t sitl 2>/dev/null || true
   kill_by_cmd '[p]x4_sitl_default/bin/px4' -9
   kill_by_cmd '[g]z sim' -9
@@ -269,6 +287,7 @@ remote)
     log "   已停掉终端摇杆守护 → 控制权交给网页（要回终端飞：flight stop && flight start）"
   fi
   sleep 1
+  ensure_agent
   log "③ 网页遥控  rc_server :8000"
   ros2 launch flight_ui remote.launch.py &
   launch_pid=$!
