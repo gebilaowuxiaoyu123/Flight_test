@@ -6,6 +6,7 @@
 #   ./scripts/fly.sh sim              ② 仿真：PX4 + Gazebo（默认带 3D 窗口）
 #   ./scripts/fly.sh remote           ③ 网页遥控：rc_server 日志 + 自动开浏览器
 #   ./scripts/fly.sh views            ④ 三视角：第一人称 / 第三人称 / 俯视 三个窗口
+#   ./scripts/fly.sh perc             ⑤ 感知：min_depth + optical_flow_logger
 #
 # ---- 一把梭（全部都丢后台 tmux，适合无人值守）----
 #   ./scripts/fly.sh start            起仿真 + 后端 + 摇杆守护
@@ -212,10 +213,10 @@ start)
 stop)
   log "停止 ..."
   for s in stick tele; do tmux kill-session -t "$s" 2>/dev/null || true; done
-  for p in $(ps -eo pid,args | awk '/scripts\/(stick_keeper|telemetry_watch|view3|link_monitor)\.py|flight_ui_cpp\/rc_server/ && !/awk/ {print $1}'); do
+  for p in $(ps -eo pid,args | awk '/scripts\/(stick_keeper|telemetry_watch|view3|link_monitor)\.py|flight_ui_cpp\/rc_server|flight_perception_cpp\/(min_depth|optical_flow_logger)/ && !/awk/ {print $1}'); do
     kill "$p" 2>/dev/null || true
   done
-  for s in agent sitl stick gzgui web cams; do tmux kill-session -t "$s" 2>/dev/null || true; done
+  for s in agent sitl stick gzgui web cams depthbridge; do tmux kill-session -t "$s" 2>/dev/null || true; done
   # flight link 是前台起的 agent，没有 tmux 会话，得按进程名收
   kill_by_cmd '[M]icroXRCEAgent'
   for p in $(ps -eo pid,args | awk '/gz sim -g/ && !/awk/ {print $1}'); do
@@ -302,6 +303,25 @@ remote)
   open_browser
   raise_windows
   wait "${launch_pid}"
+  ;;
+
+perc)
+  # 感知节点：min_depth（深度图 → /obstacle_distance）+ optical_flow_logger（光流 → CSV）
+  log "⑤ 感知  min_depth(/obstacle_distance) + optical_flow_logger(CSV)"
+  # min_depth 要 /depth_camera，没有就把 gz 深度图桥过来（和 views 里桥相机一个道理）
+  # 注意：gz 自己也跑 DDS，"名字在"不等于"有人发"（Publisher count 可能是 0），
+  # 所以必须看 publisher 数，不能只看 topic list。
+  if ! timeout 5 ros2 topic info /depth_camera 2>/dev/null \
+       | grep -qE "Publisher count: [1-9]"; then
+    tmux kill-session -t depthbridge 2>/dev/null || true
+    tmux new-session -d -s depthbridge \
+      "${ROS_ENV} && ros2 run ros_gz_bridge parameter_bridge \
+       /depth_camera@sensor_msgs/msg/Image@gz.msgs.Image \
+       > /tmp/depthbridge.log 2>&1"
+    log "   深度图桥已启动（tmux: depthbridge）"
+    sleep 3
+  fi
+  exec ros2 launch flight_perception_cpp perception_cpp.launch.py "${@:2}"
   ;;
 
 views)

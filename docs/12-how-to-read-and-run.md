@@ -41,6 +41,10 @@ src/flight_ui_cpp/            ← C++ 后端（一个文件一件事）
     ├── ws_session.cpp    205 行  主循环：读一帧 → 改状态/发命令 → 回 ack
     └── http_server.cpp    98 行
 
+src/flight_perception_cpp/    ← C++ 感知（两个可执行，合计 193 行）
+├── src/min_depth.cpp       92 行  32FC1 深度图中央 ROI 最小距离 → /obstacle_distance
+└── src/optical_flow_logger.cpp 101 行  光流/测距/EKF 速度写 CSV
+
 scripts/                      ← 运维脚本
 ├── run_show.sh          一条命令起录制链路（本机实测可用）
 ├── demo_show.py         飞行演出 + 三视角合成录制

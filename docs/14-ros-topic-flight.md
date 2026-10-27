@@ -17,6 +17,7 @@ flight link      # ① 通信连接：MicroXRCEAgent + 节点清单 + 话题频�
 flight sim       # ② 仿真：PX4 + Gazebo 3D 窗口
 flight remote    # ③ 网页遥控：rc_server 日志 + 自动开浏览器
 flight views     # ④ 三视角：第一人称 / 第三人称 / 俯视
+flight perc      # ⑤ 感知：min_depth(/obstacle_distance) + 光流 CSV（会自动桥深度图）
 ```
 
 每条都是前台进程，Ctrl-C 只停这一个。顺序 ①→②→③→④。

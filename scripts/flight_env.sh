@@ -27,7 +27,7 @@ flight() {
       _flight_env
       ros2 launch flight_ui flight.launch.py "${@:2}"
       ;;
-    link|sim|remote|views|clean|start|stop|status|watch|gui|logs|mode|arm|takeoff|up|down|fwd|back|left|right|spin|land)
+    link|sim|remote|views|perc|clean|start|stop|status|watch|gui|logs|mode|arm|takeoff|up|down|fwd|back|left|right|spin|land)
       "${FLIGHT_ROOT}/scripts/fly.sh" "$@"
       ;;
     *':='*)
@@ -41,6 +41,7 @@ flight() {
       echo "  flight sim                  ② 仿真控制台（带 3D 窗口）"
       echo "  flight remote               ③ 网页遥控控制台 + 浏览器"
       echo "  flight views                ④ 三视角窗口"
+      echo "  flight perc                 ⑤ 感知节点（min_depth / 光流 CSV）"
       echo "  flight clean [--all]        清 PX4 飞行日志（掉盘元凶）"
       echo "  flight start|stop|status|...  等价于 fly <动作>"
       echo "  flight headless:=false      参数传给 ros2 launch"
