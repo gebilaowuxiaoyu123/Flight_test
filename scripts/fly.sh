@@ -105,11 +105,15 @@ open_browser() {
   fi
   local profile="${HOME}/snap/firefox/common/flight_show_profile"
   mkdir -p "${profile}"
-  grep -q 'sessionstore.resume_from_crash' "${profile}/user.js" 2>/dev/null || \
+  if ! grep -q 'network.proxy.type' "${profile}/user.js" 2>/dev/null; then
     cat >> "${profile}/user.js" <<'JS'
 user_pref("browser.sessionstore.resume_from_crash", false);
 user_pref("browser.startup.page", 1);
+// 本机开着 127.0.0.1:7890 代理，Firefox 会把 127.0.0.1:8000 也丢给代理 → 502
+user_pref("network.proxy.type", 0);
+user_pref("network.proxy.no_proxies_on", "localhost, 127.0.0.1, ::1");
 JS
+  fi
   rm -f "${profile}"/sessionstore* "${profile}"/recovery.jsonlz4 2>/dev/null || true
   log "启动浏览器 → http://127.0.0.1:8000/"
   tmux kill-session -t web 2>/dev/null || true
@@ -253,13 +257,23 @@ sim)
   ;;
 
 remote)
-  # 网页遥控：后端日志直接打在这个终端，顺便把浏览器打开
+  # 网页遥控：后端日志直接打在这个终端，后端通了再开浏览器
   kill_by_cmd '[f]light_ui_cpp/rc_server'
   sleep 1
   log "③ 网页遥控  rc_server :8000"
+  ros2 launch flight_ui remote.launch.py &
+  launch_pid=$!
+  trap 'kill "${launch_pid}" 2>/dev/null || true' EXIT
+  for _ in $(seq 1 30); do
+    if curl -fsS --noproxy '*' --max-time 1 http://127.0.0.1:8000/health >/dev/null 2>&1; then
+      log "   后端已就绪 http://127.0.0.1:8000/"
+      break
+    fi
+    sleep 1
+  done
   open_browser
   raise_windows
-  exec ros2 launch flight_ui remote.launch.py
+  wait "${launch_pid}"
   ;;
 
 views)

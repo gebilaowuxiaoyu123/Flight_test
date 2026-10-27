@@ -29,7 +29,12 @@ ln -sfn "${PROJECT_ROOT}/px4_overlay/worlds/flow.sdf" \
 export PX4_SIM_MODEL="gz_${MODEL}"
 export PX4_SYS_AUTOSTART="${PX4_SYS_AUTOSTART:-4021}"
 export PX4_GZ_WORLD="${PX4_GZ_WORLD:-flow}"
-export HEADLESS="${HEADLESS:-1}"
+# PX4 的 px4-rc.gzsim 只在 HEADLESS "完全没有定义" 时才起 gz gui，
+# 定义成 0 也会被当成"要无头"。所以 0 必须 unset，不能 export 0。
+case "${HEADLESS:-1}" in
+  0|false|no|off) unset HEADLESS; HEADLESS_DESC="带 3D 窗口" ;;
+  *)              export HEADLESS=1; HEADLESS_DESC="无头" ;;
+esac
 # SITL without a real RC/GCS: disable the GCS-link arming requirement and
 # bypass the power/USB/safety-button checks.  These can also be set at the
 # pxh> prompt, but env vars make every restart reproducible.
@@ -56,7 +61,7 @@ export PX4_PARAM_COM_DISARM_PRFLT=0
 export PX4_PARAM_SDLOG_MODE="${PX4_PARAM_SDLOG_MODE:--1}"
 export GZ_SIM_RESOURCE_PATH="${PROJECT_ROOT}/px4_overlay/models:${GZ_SIM_RESOURCE_PATH:-}"
 
-log "启动 ${MODEL}（airframe ${PX4_SYS_AUTOSTART}，HEADLESS=${HEADLESS}）..."
+log "启动 ${MODEL}（airframe ${PX4_SYS_AUTOSTART}，${HEADLESS_DESC}）..."
 if [ "${PX4_PARAM_SDLOG_MODE}" = "-1" ]; then
   log "ulog 黑匣子已关闭（想开：PX4_PARAM_SDLOG_MODE=0 ./scripts/fly.sh sim）"
 fi
