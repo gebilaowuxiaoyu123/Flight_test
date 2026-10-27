@@ -6,6 +6,7 @@
   const ctrlEl = $('ctrl');
   const altEl = $('alt');
   const batEl = $('bat');
+  const obstEl = $('obst');
   const logEl = $('log');
 
   let ws = null;
@@ -157,6 +158,8 @@
     modeEl.textContent = t.mode ?? '--';
     altEl.textContent = (t.alt ?? 0).toFixed(2);
     batEl.textContent = t.battery >= 0 ? t.battery.toFixed(0) : '--';
+    // 感知包没跑时后端给 -1，显示 "--"
+    obstEl.textContent = t.obstacle_m >= 0 ? '障碍 ' + t.obstacle_m.toFixed(2) + 'm' : '障碍 --';
 
     // 杆量回显：别人在飞的时候，把摇杆视觉上跟到真实杆量。
     // 自己握着控制权时绝不回写，否则手指拖动会被下一帧遥测拽回去。

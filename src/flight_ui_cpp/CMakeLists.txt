@@ -9,6 +9,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 # Boost.Beast 是 header-only，但要链 Boost.System / Boost.Thread
 find_package(ament_index_cpp REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system thread)
@@ -31,6 +32,7 @@ ament_target_dependencies(
   rc_server
   "rclcpp"
   "px4_msgs"
+  "std_msgs"
   "ament_index_cpp"
 )
 # 注意：ament_target_dependencies 用的是 plain 签名，

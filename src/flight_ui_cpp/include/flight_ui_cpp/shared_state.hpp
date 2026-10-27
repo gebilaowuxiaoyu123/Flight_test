@@ -108,6 +108,21 @@ public:
         return ref_alt_ - z_ + relative_m;
     }
 
+    // 来自 /obstacle_distance（感知包 flight_perception_cpp 的输出）
+    void setObstacle(double meters)
+    {
+        std::lock_guard<std::mutex> lock(telemetry_mutex_);
+        obstacle_m_ = meters;
+        last_obstacle_ = std::chrono::steady_clock::now();
+    }
+
+    // 没有感知在跑时返回 -1（前端据此显示 "--"）；超过 2 s 没更新也算失效
+    double obstacleDistance() const
+    {
+        std::lock_guard<std::mutex> lock(telemetry_mutex_);
+        return obstacleDistanceLocked();
+    }
+
     // 来自 battery_status：voltage_v 是电压，remaining 是剩余比例(0~1，-1 表示未知)
     void setBattery(float voltage_v, float remaining)
     {
@@ -132,6 +147,7 @@ public:
             root["z_valid"] = z_valid_;
             root["z"] = z_;                          // 原始 NED，调试用
             root["alt"] = z_valid_ ? -z_ : 0.0;      // NED 向下为正，取负才是高度
+            root["obstacle_m"] = obstacleDistanceLocked();
             root["voltage_v"] = voltage_v_;
             root["battery"] = battery_pct_;          // 百分数，-1 表示未知
         }
@@ -164,6 +180,19 @@ public:
     }
 
 private:
+    // 调用方必须已经持有 telemetry_mutex_
+    double obstacleDistanceLocked() const
+    {
+        if (last_obstacle_.time_since_epoch().count() == 0) {
+            return -1.0;
+        }
+        if (std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - last_obstacle_).count() > 2.0) {
+            return -1.0;
+        }
+        return obstacle_m_;
+    }
+
     // 两把锁：控制链（20ms 高频）和遥测链（10Hz）互不阻塞
     mutable std::mutex mutex_;
     mutable std::mutex telemetry_mutex_;
@@ -184,4 +213,6 @@ private:
     double ref_alt_ = std::nan("");
     float voltage_v_ = 0.0F;
     double battery_pct_ = -1.0;      // -1 表示未知
+    double obstacle_m_ = -1.0;       // 正前方最近障碍（m），-1 表示没有感知数据
+    std::chrono::steady_clock::time_point last_obstacle_{};
 };

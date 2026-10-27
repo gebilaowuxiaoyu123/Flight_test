@@ -23,6 +23,7 @@
 #include <px4_msgs/msg/vehicle_command.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
 #include <px4_msgs/msg/vehicle_status.hpp>
+#include <std_msgs/msg/float32.hpp>
 
 #include "flight_ui_cpp/command_sequence.hpp"
 #include "flight_ui_cpp/http_server.hpp"
@@ -62,6 +63,14 @@ int main(int argc, char ** argv)   // 装配 + spin
         "/fmu/out/battery_status", qos,
         [&](const px4_msgs::msg::BatteryStatus::SharedPtr msg) {
             state.setBattery(msg->voltage_v, msg->remaining);
+        });
+
+    // 感知包（flight_perception_cpp 的 min_depth）输出正前方最近障碍距离。
+    // 没跑感知时这条订阅收不到东西，遥测里 obstacle_m 就是 -1。
+    auto obstacle_sub = node->create_subscription<std_msgs::msg::Float32>(
+        "/obstacle_distance", rclcpp::QoS(rclcpp::KeepLast(1)).reliable(),
+        [&](const std_msgs::msg::Float32::SharedPtr msg) {
+            state.setObstacle(msg->data);
         });
 
     const auto qos_in = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
