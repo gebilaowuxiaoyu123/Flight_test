@@ -22,6 +22,12 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 STICK_FILE = '/tmp/stick.json'
+# 控制权租约：和网页后端（rc_server）抢同一个话题时，同一时刻只有一方发杆量。
+# 文件格式和 C++ 侧（control_lease.cpp）一致：<owner> <prio> <pid> <unix_ts>
+LEASE_FILE = '/tmp/flight_control.lease'
+LEASE_NAME = 'terminal'
+LEASE_PRIO = 5              # 网页是 10，优先级更高，网页一连上就抢走
+LEASE_STALE_SEC = 2.0
 # 过期后发什么：回中 = ALTCTL 里零爬升率 → 悬停。
 # 不能用油门最低（那就是往下掉），更不能沿用上一条杆量（会一直爬）。
 HOVER = dict(roll=0.0, pitch=0.0, yaw=0.0, throttle=0.0, valid=True)
@@ -52,6 +58,55 @@ def read_stick():
         return dict(HOVER), True
 
 
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def _read_lease():
+    try:
+        with open(LEASE_FILE) as f:
+            owner, prio, pid, ts = f.readline().split()
+        return owner, int(prio), int(pid), int(ts)
+    except (OSError, ValueError):
+        return None
+
+
+def _write_lease():
+    tmp = LEASE_FILE + '.tmp'
+    try:
+        with open(tmp, 'w') as f:
+            f.write(f'{LEASE_NAME} {LEASE_PRIO} {os.getpid()} {int(time.time() * 1000)}\n')
+        os.replace(tmp, LEASE_FILE)      # 原子替换，读端不会读到半行
+    except OSError:
+        pass
+
+
+def try_acquire_lease() -> bool:
+    """能不能发杆量。能就顺手刷心跳，不能就返回 False。"""
+    cur = _read_lease()
+    now_ms = int(time.time() * 1000)
+    free = (cur is None) or (now_ms - cur[3] > LEASE_STALE_SEC * 1000) or (not _pid_alive(cur[2]))
+    if free or cur[0] == LEASE_NAME or cur[1] < LEASE_PRIO:
+        _write_lease()
+        return True
+    return False
+
+
+def release_lease():
+    cur = _read_lease()
+    if cur and cur[0] == LEASE_NAME:
+        try:
+            os.remove(LEASE_FILE)
+        except OSError:
+            pass
+
+
 def _acquire_singleton(lock_path: str):
     """同一时刻只允许一个实例。已有实例在跑就安静退出。
 
@@ -76,7 +131,24 @@ def main():
     print('stick_keeper 已启动（50 Hz）', flush=True)
 
     stale_announced = False
+    lease_ok = False
+    lease_checked = 0.0
     while rclpy.ok():
+        now = time.time()
+        if now - lease_checked > 0.5:
+            lease_checked = now
+            was = lease_ok
+            lease_ok = try_acquire_lease()
+            if was and not lease_ok:
+                cur = _read_lease()
+                print(f'⚠ 控制权被 {cur[0] if cur else "?"} 接管，暂停发杆（网页在操控）',
+                      flush=True)
+            elif not was and lease_ok:
+                print('控制权已取得，恢复发杆', flush=True)
+        if not lease_ok:
+            time.sleep(0.02)
+            continue
+
         s, stale = read_stick()
         if stale and not stale_announced:
             print(f'⚠ 杆量文件 {STALE_SEC:.0f}s 未更新，已回中悬停', flush=True)

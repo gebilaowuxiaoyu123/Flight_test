@@ -23,7 +23,8 @@ add_executable(rc_server
   src/command_sequence.cpp
   src/http_util.cpp
   src/ws_session.cpp
-  src/http_server.cpp)
+  src/http_server.cpp
+  src/control_lease.cpp)
 target_include_directories(rc_server PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)

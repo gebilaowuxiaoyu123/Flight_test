@@ -26,6 +26,7 @@
 #include <std_msgs/msg/float32.hpp>
 
 #include "flight_ui_cpp/command_sequence.hpp"
+#include "flight_ui_cpp/control_lease.hpp"
 #include "flight_ui_cpp/http_server.hpp"
 #include "flight_ui_cpp/mode_tables.hpp"
 #include "flight_ui_cpp/shared_state.hpp"
@@ -91,10 +92,42 @@ int main(int argc, char ** argv)   // 装配 + spin
                     t["voltage_v"].asDouble());
     });
 
+    // 控制权租约：和 stick_keeper 抢同一个话题时，只有一个真正发。
+    // 每 0.5 s 协商一次（文件 IO 不必每 20 ms 做一遍），中间沿用上次结论。
+    auto lease_checked = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+    bool i_hold_lease = false;
+
     // 50 Hz：先从 state 取一份加锁快照，再在锁外发布
     auto control_timer = node->create_wall_timer(std::chrono::milliseconds(20), [&]() {
         const auto c = state.control();
         const bool armed = state.armed();
+
+        const auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration<double>(now - lease_checked).count() > 0.5) {
+            lease_checked = now;
+            const bool had = i_hold_lease;
+            if (c.any_client) {
+                i_hold_lease = control_lease::acquire("web", control_lease::kPrioWeb);
+            } else {
+                // 没有网页连着就别占着控制权，让终端摇杆守护接手
+                control_lease::release("web");
+                i_hold_lease = false;
+            }
+            if (had != i_hold_lease) {
+                const auto e = control_lease::read();
+                if (i_hold_lease) {
+                    RCLCPP_INFO(node->get_logger(), "[控制权] 网页接管发杆量");
+                } else {
+                    RCLCPP_WARN(node->get_logger(),
+                                "[控制权] 暂停发杆量，当前归 '%s'（%s）—— 关掉它或等它释放",
+                                e.owner.empty() ? "?" : e.owner.c_str(),
+                                e.owner == "terminal" ? "终端摇杆守护" : "其它进程");
+                }
+            }
+        }
+        if (!i_hold_lease) {
+            return;                    // 不是我的控制权，一根杆都不发
+        }
 
         // valid 表示"有人在管这架飞机"。PX4 用 valid=false 判定遥控丢失，
         // 会把未经使能的帧当成"没有遥控器"→ 直接拒绝解锁。
