@@ -37,11 +37,25 @@ ROS 2 + PX4（四旋翼）+ Gazebo Harmonic 的仿真、遥控器界面与感知
 **只想跑起来 / 飞一飞（先装一次短命令）：**
 
 ```bash
-./scripts/install_aliases.sh     # 之后重开终端
-flight                           # 起整条链路
-tele                             # 终端实时看姿态
-fly takeoff                      # 解锁并爬到 1.2 m
-fly land                         # 降落上锁
+./scripts/install_aliases.sh     # 之后 unalias flight remote 2>/dev/null; source ~/.bashrc
+```
+
+四个终端，一条命令一个，日志就打在自己终端里：
+
+```bash
+flight link      # ① 通信连接（MicroXRCEAgent + 节点/频率）
+flight sim       # ② 仿真（PX4 + Gazebo 3D 窗口）
+flight remote    # ③ 网页遥控（后端日志 + 自动开浏览器）
+flight views     # ④ 三视角（第一人称 / 第三人称 / 俯视）
+```
+
+飞：
+
+```bash
+flight status    # 一行状态
+flight takeoff   # 解锁并爬到 1.2 m
+fly fwd 3        # 前进 3 秒
+flight land      # 降落上锁
 ```
 
 **想录演示视频：**
@@ -59,14 +73,25 @@ fly land                         # 降落上锁
 ```
 flight_project/
 ├── versions.env          # 所有版本号的唯一来源
-├── PX4-Autopilot/        # 上游 PX4（脚本克隆，git 忽略）
+├── scripts/              # ★ 唯一入口：短命令全指向这里（fly.sh / clean_logs.sh …）
+├── src/                  # ROS 2 工作区（我们写的代码）
 ├── px4_overlay/          # 自定义模型 / airframe，升级 PX4 后重新叠加
-├── src/                  # ROS 2 工作区
-├── web/                  # Web 遥控器前端
-├── scripts/              # 安装 / 构建 / 运行 / 验证
 ├── docs/                 # 配套教材
+├── artifacts/            # 产出物（视频），不入库
+├── PX4-Autopilot/        # 上游 PX4（脚本克隆，独立 git，git 忽略，不要手改）
+├── Micro-XRCE-DDS-Agent/ # 上游 Agent（同上）
+├── src/px4_msgs/ src/ros_gz/   # 上游消息/桥（同上）
+├── build/ install/ log/  # colcon 产出，git 忽略
 └── PROGRESS.md           # 断点续做
 ```
+
+**目录规矩**（和 RMCS 工作区一致）：
+
+1. **上游克隆零污染**：`PX4-Autopilot/`、`Micro-XRCE-DDS-Agent/`、`src/px4_msgs/`、`src/ros_gz/`
+   都是独立 git 仓库，只在脚本里用，不放我们自己的东西；升级时整目录替换。
+2. **自己写的代码只有三处**：`src/`（ROS 2 包）、`scripts/`（运维脚本）、`px4_overlay/`（模型）。
+3. **产出物进 `artifacts/`**，文档进 `docs/`，不要在根目录散落文件。
+4. **磁盘**：PX4 黑匣子日志会涨到十几 G，定期 `flight clean`（见下）。
 
 ## 环境基线
 
@@ -77,7 +102,7 @@ flight_project/
 | PX4 | v1.16.2 |
 | Gazebo | Harmonic (`gz-sim8`) |
 | 内存 | 30 GB（无 swap，编译默认 `-j8`） |
-| 磁盘 | 约 29 GB 可用，整套预计 8–11 GB |
+| 磁盘 | 整套约 22 GB（PX4 build 19 GB）。跑久了先 `flight clean` |
 
 ## 升级路线
 

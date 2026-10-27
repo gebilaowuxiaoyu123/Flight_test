@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import sys
+import math
 import time
 
 from rosboot import ensure_ros
@@ -83,7 +83,9 @@ def main():
 
     d = read(args.timeout)
     if not d:
-        print('  （收不到遥测：仿真没起？先跑 flight 或 fly start）')
+        # 诊断信息只走 stderr：--alt / --armed 的 stdout 必须是纯数字，
+        # 否则调用方拿去做 bc 运算会炸（曾表现为 standard_in: illegal character）
+        print('收不到遥测：仿真没起？先跑 flight 或 fly start', file=sys.stderr)
         return 1
 
     if args.alt:

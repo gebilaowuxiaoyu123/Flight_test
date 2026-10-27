@@ -7,8 +7,21 @@
 先装一次短命令（写入 `~/.bashrc`）：
 
 ```bash
-./scripts/install_aliases.sh     # 装完 source ~/.bashrc 或重开终端
+./scripts/install_aliases.sh     # 装完 unalias flight remote 2>/dev/null; source ~/.bashrc
 ```
+
+### 四个终端（推荐，日志就在眼前）
+
+```bash
+flight link      # ① 通信连接：MicroXRCEAgent + 节点清单 + 话题频率
+flight sim       # ② 仿真：PX4 + Gazebo 3D 窗口
+flight remote    # ③ 网页遥控：rc_server 日志 + 自动开浏览器
+flight views     # ④ 三视角：第一人称 / 第三人称 / 俯视
+```
+
+每条都是前台进程，Ctrl-C 只停这一个。顺序 ①→②→③→④。
+
+### 一把梭 / 全部表格
 
 之后：
 
@@ -16,8 +29,9 @@
 |---|---|---|
 | `flight` | `ros2 launch flight_ui flight.launch.py` | 起整条链路（DDS 桥 + PX4/Gazebo + 摇杆守护 + Web 后端） |
 | `flight start` | `./scripts/fly.sh start` | 同上一行，但后台跑（tmux 托管），Ctrl-C 不会全停 |
-| `flight <动作>` | `./scripts/fly.sh <动作>` | 17 个动作随便接：`status` `gui` `logs` `takeoff` `fwd 2` … |
-| `remote` | `ros2 launch flight_ui remote.launch.py` | 只起 Web 遥控器后端（仿真已在跑时用） |
+| `flight <动作>` | `./scripts/fly.sh <动作>` | 21 个动作随便接：`link` `sim` `remote` `views` `status` `takeoff` `fwd 2` … |
+| `flight clean` | `./scripts/clean_logs.sh` | 清 PX4 黑匣子日志（掉盘元凶） |
+| `remote` | `./scripts/fly.sh remote` | 同 ③，起 Web 后端并开浏览器 |
 | `fly <动作>` | `./scripts/fly.sh <动作>` | 终端飞 |
 | `tele` | `./scripts/fly.sh watch` | 终端实时看姿态 |
 | `flystatus` | `./scripts/fly.sh status` | 一行状态 |
@@ -144,3 +158,18 @@ unalias flight remote 2>/dev/null; source ~/.bashrc
 **改完命令为什么不生效**
 
 `.bashrc` 只在开新终端时才读。已经开着的终端要手动 `source ~/.bashrc`。
+
+## 磁盘：为什么会剩 3.9 G
+
+PX4 SITL 每次启动都以 100 Hz 写黑匣子 `.ulg` 到
+`PX4-Autopilot/build/px4_sitl_default/rootfs/log/`，只要不关就一直涨。
+实测 2026-10-25 一整晚写了 **9.6 GB**，累到 18 GB，根分区只剩 3.7 G。
+
+```bash
+flight clean           # 删 24 小时前的
+flight clean --all     # 全删
+df -h /                # 确认
+```
+
+现在 `run_sitl_combined.sh` 默认 `PX4_PARAM_SDLOG_MODE=-1`（关闭黑匣子），
+不会再涨。真要留日志：`PX4_PARAM_SDLOG_MODE=0 flight sim`。

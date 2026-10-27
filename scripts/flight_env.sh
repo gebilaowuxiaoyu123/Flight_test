@@ -17,8 +17,8 @@ _flight_env() {
 }
 
 # flight 三种用法：
-#   flight                    起整条链路（ros2 launch）
-#   flight start / stop / gui 等价于 fly <动作>，透传给 scripts/fly.sh
+#   flight                    起整条链路（ros2 launch，一把梭全后台）
+#   flight link|sim|remote|views|start|...  等价于 fly <动作>，透传给 scripts/fly.sh
 #   flight headless:=false    参数原样传给 ros2 launch
 flight() {
   local sub="${1:-}"
@@ -27,7 +27,7 @@ flight() {
       _flight_env
       ros2 launch flight_ui flight.launch.py "${@:2}"
       ;;
-    start|stop|status|watch|gui|logs|mode|arm|takeoff|up|down|fwd|back|left|right|spin|land)
+    link|sim|remote|views|clean|start|stop|status|watch|gui|logs|mode|arm|takeoff|up|down|fwd|back|left|right|spin|land)
       "${FLIGHT_ROOT}/scripts/fly.sh" "$@"
       ;;
     *':='*)
@@ -36,8 +36,13 @@ flight() {
       ;;
     -h|--help|help)
       echo "用法："
-      echo "  flight                      起整条链路"
-      echo "  flight start|stop|gui|...   等价于 fly <动作>"
+      echo "  flight                      起整条链路（后台）"
+      echo "  flight link                 ① 通信连接控制台"
+      echo "  flight sim                  ② 仿真控制台（带 3D 窗口）"
+      echo "  flight remote               ③ 网页遥控控制台 + 浏览器"
+      echo "  flight views                ④ 三视角窗口"
+      echo "  flight clean [--all]        清 PX4 飞行日志（掉盘元凶）"
+      echo "  flight start|stop|status|...  等价于 fly <动作>"
       echo "  flight headless:=false      参数传给 ros2 launch"
       ;;
     *)
@@ -48,10 +53,7 @@ flight() {
   esac
 }
 
-remote() {
-  _flight_env
-  ros2 launch flight_ui remote.launch.py "$@"
-}
+remote() { "${FLIGHT_ROOT}/scripts/fly.sh" remote "$@"; }
 
 fly()       { "${FLIGHT_ROOT}/scripts/fly.sh" "$@"; }
 tele()      { "${FLIGHT_ROOT}/scripts/fly.sh" watch; }

@@ -50,8 +50,15 @@ export PX4_PARAM_COM_LOW_BAT_ACT=0
 export PX4_PARAM_BAT_LOW_THR=0.05
 export PX4_PARAM_COM_DISARM_LAND=0
 export PX4_PARAM_COM_DISARM_PRFLT=0
+# PX4 会以 100 Hz 写 .ulg 到 build/px4_sitl_default/rootfs/log/，只要 SITL 不关就一直涨
+# （实测跑 8 小时 ≈ 9.6 GB，曾把根分区吃到剩 3.7 G）。SITL 不需要黑匣子，默认关掉。
+# 真要留日志：PX4_PARAM_SDLOG_MODE=0 ./scripts/fly.sh sim
+export PX4_PARAM_SDLOG_MODE="${PX4_PARAM_SDLOG_MODE:--1}"
 export GZ_SIM_RESOURCE_PATH="${PROJECT_ROOT}/px4_overlay/models:${GZ_SIM_RESOURCE_PATH:-}"
 
 log "启动 ${MODEL}（airframe ${PX4_SYS_AUTOSTART}，HEADLESS=${HEADLESS}）..."
+if [ "${PX4_PARAM_SDLOG_MODE}" = "-1" ]; then
+  log "ulog 黑匣子已关闭（想开：PX4_PARAM_SDLOG_MODE=0 ./scripts/fly.sh sim）"
+fi
 cd "${GZ_BRIDGE_DIR}"
 exec "${PX4_BIN}"

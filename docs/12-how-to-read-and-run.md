@@ -131,7 +131,33 @@ scripts/                      ← 运维脚本
 
 ## 三、怎么跑
 
-日常只用三条命令：
+### 四终端控制台（推荐）
+
+一个终端一条命令，日志直接打在你眼前，Ctrl-C 只停这一个。
+
+```bash
+flight link      # ① 通信连接：MicroXRCEAgent + 节点清单 + 话题频率
+flight sim       # ② 仿真：PX4 + Gazebo（带 3D 窗口；HEADLESS=1 则无窗口）
+flight remote    # ③ 网页遥控：rc_server 日志 + 自动开浏览器
+flight views     # ④ 三视角窗口：第一人称 / 第三人称 / 俯视
+```
+
+顺序就是 ①→②→③→④。四条都起来后：
+
+```bash
+flight status    # 一行状态
+flight takeoff   # 解锁并爬到 1.2 m
+flight fwd 3     # 前进 3 秒
+flight land      # 降落并上锁
+```
+
+首次使用先装短命令（写入 `~/.bashrc`）：
+
+```bash
+./scripts/install_aliases.sh   # 装完 unalias flight remote 2>/dev/null; source ~/.bashrc
+```
+
+### 一把梭（无人值守）
 
 ```bash
 ./scripts/run_show.sh              # 起全部服务，浏览器访问 http://127.0.0.1:8000/
@@ -150,18 +176,21 @@ source install/setup.bash
 > 改了前端（`src/flight_ui/web/`）也要重新 build —— 是实体拷贝到
 > `install/.../share/flight_ui_cpp/web/`，不是软链。
 
-`run_show.sh` 会依次起：仿真 → C++ 后端(:8000) → 三路相机桥 → 相机动捕
-→ Xephyr(:1) 里的浏览器。网页放在 Xephyr 里是因为桌面一锁屏，
-`x11grab` 抓到的那块会变成一片黑。
+### 磁盘
 
-调试用的额外命令：
+PX4 SITL 会把黑匣子日志写到 `PX4-Autopilot/build/px4_sitl_default/rootfs/log/`，
+一直跑就一直涨（实测一整晚 9.6 GB，曾把根分区吃到剩 3.7 G）。
 
 ```bash
-python3 scripts/demo_show.py --dry-run    # 只飞不录
-python3 scripts/rerender_panel.py --video in.mp4 --out out.mp4   # 只重做下半屏，不重飞
+flight clean           # 删 24 小时前的 .ulg
+flight clean --all     # 全删
+df -h /               # 看剩余
 ```
 
-### 4. 验收
+`run_sitl_combined.sh` 现在默认 `PX4_PARAM_SDLOG_MODE=-1`（关闭黑匣子），
+要留日志就 `PX4_PARAM_SDLOG_MODE=0 flight sim`。
+
+### 验收
 
 ```bash
 ./scripts/verify.sh              # 13 项环境/链路检查

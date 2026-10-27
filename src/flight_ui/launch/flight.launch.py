@@ -32,16 +32,15 @@ def generate_launch_description():
         LogInfo(msg='启动 MicroXRCEAgent ...'),
         ExecuteProcess(
             cmd=['MicroXRCEAgent', 'udp4', '-p', '8888'],
-            output='log',
+            output='screen',
             name='micro_xrce_agent',
         ),
 
         LogInfo(msg='启动 PX4 + Gazebo ...'),
         ExecuteProcess(
             cmd=['bash', '-lc',
-                 f'cd {project} && HEADLESS=${{HEADLESS:-1}} '
-                 f'./scripts/run_sitl_combined.sh'],
-            additional_env={'HEADLESS': '1'},
+                 f'cd {project} && ./scripts/run_sitl_combined.sh'],
+            additional_env={'HEADLESS': headless},
             output='log',
             name='px4_sitl',
         ),
@@ -53,10 +52,10 @@ def generate_launch_description():
             name='stick_keeper',
         ),
 
-        LogInfo(msg='启动 Web 后端 ...', condition=IfCondition(remote)),
+        LogInfo(msg='启动 Web 后端（日志打在本终端）...', condition=IfCondition(remote)),
         ExecuteProcess(
             cmd=[f'{ws}/install/flight_ui_cpp/lib/flight_ui_cpp/rc_server'],
-            output='log',
+            output='screen',
             name='rc_server',
             condition=IfCondition(remote),
         ),

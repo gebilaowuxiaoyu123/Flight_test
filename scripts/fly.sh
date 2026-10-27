@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
-# 终端飞飞机：把 ROS 话题的细节全部包起来，你只要敲几个词。
+# 终端飞飞机 + 一键拉起各个控制台。把 ROS 话题的细节全部包起来，你只要敲几个词。
 #
+# ---- 四个终端（每个前台跑一路，日志直接打在终端里，Ctrl-C 只停这一个）----
+#   ./scripts/fly.sh link             ① 通信连接：MicroXRCEAgent + 节点清单/话题频率
+#   ./scripts/fly.sh sim              ② 仿真：PX4 + Gazebo（默认带 3D 窗口）
+#   ./scripts/fly.sh remote           ③ 网页遥控：rc_server 日志 + 自动开浏览器
+#   ./scripts/fly.sh views            ④ 三视角：第一人称 / 第三人称 / 俯视 三个窗口
+#
+# ---- 一把梭（全部都丢后台 tmux，适合无人值守）----
 #   ./scripts/fly.sh start            起仿真 + 后端 + 摇杆守护
 #   ./scripts/fly.sh stop             全部停掉
+#
+# ---- 飞 ----
 #   ./scripts/fly.sh status           看当前模式/解锁/高度
 #   ./scripts/fly.sh watch            终端实时刷新姿态（模式/横滚/俯仰/航向/速度）
 #   ./scripts/fly.sh gui              开 Gazebo 3D 窗口 + 浏览器（想亲眼看时用）
@@ -56,7 +65,9 @@ hold() {  # hold <秒> <roll> <pitch> <yaw> <throttle>：期间不断刷新，�
 }
 
 altitude() {  # 一次性读高度（约 1 s），不依赖任何常驻缓存
-  python3 "${PROJECT_ROOT}/scripts/tstatus.py" --alt --timeout 1.5 2>/dev/null || true
+  # 只放行纯数字：调用方要拿它做 bc 比较，混进注释文字会让 bc 报 illegal character
+  python3 "${PROJECT_ROOT}/scripts/tstatus.py" --alt --timeout 1.5 2>/dev/null \
+    | awk 'NF == 1 && $1 ~ /^-?[0-9]+(\.[0-9]+)?$/ { v = $1 } END { if (v != "") print v }' || true
 }
 
 nav_state() {
@@ -74,6 +85,60 @@ arming_state() {
 need_keeper() {
   pgrep -f 'stick_keeper.py' >/dev/null 2>&1 \
     || die "摇杆守护没在跑，先执行: ./scripts/fly.sh start"
+}
+
+# ---------------------------------------------------------------- 前台控制台用的零件
+# tmux 里跑东西要自己带环境，这里拼一份给 tmux 用
+ROS_ENV="source /opt/ros/${ROS_DISTRO}/setup.bash && source ${WORKSPACE_ROOT}/install/setup.bash"
+
+# 三路相机（和录制成片用的是同一批传感器）
+CAM_TOPICS=(
+  "/world/flow/model/x500_flow_depth_0/link/camera_link/sensor/IMX214/image@sensor_msgs/msg/Image@gz.msgs.Image"
+  "/world/flow/model/cam_third/link/link/sensor/third_cam/image@sensor_msgs/msg/Image@gz.msgs.Image"
+  "/world/flow/model/cam_top/link/link/sensor/top_cam/image@sensor_msgs/msg/Image@gz.msgs.Image"
+)
+
+open_browser() {
+  if pgrep -f 'snap/firefox.*--no-remote' >/dev/null 2>&1; then
+    log "浏览器已在运行"
+    return
+  fi
+  local profile="${HOME}/snap/firefox/common/flight_show_profile"
+  mkdir -p "${profile}"
+  grep -q 'sessionstore.resume_from_crash' "${profile}/user.js" 2>/dev/null || \
+    cat >> "${profile}/user.js" <<'JS'
+user_pref("browser.sessionstore.resume_from_crash", false);
+user_pref("browser.startup.page", 1);
+JS
+  rm -f "${profile}"/sessionstore* "${profile}"/recovery.jsonlz4 2>/dev/null || true
+  log "启动浏览器 → http://127.0.0.1:8000/"
+  tmux kill-session -t web 2>/dev/null || true
+  tmux new-session -d -s web \
+    "DISPLAY=${FLY_DISPLAY:-:0} HOME=${HOME} \
+     firefox --no-remote --new-instance --profile ${profile} \
+     http://127.0.0.1:8000/ > /tmp/firefox.log 2>&1"
+  sleep 20
+}
+
+raise_windows() {
+  for name in "Gazebo Sim" "PX4 Web RC"; do
+    local w
+    # 末尾必须 || true：xdotool 会被 head 提前关管道打成 SIGPIPE(141)，
+    # 在 set -e 下会让整个脚本静默退出（表现为"窗口没起来但也没报错"）
+    w=$(DISPLAY=${FLY_DISPLAY:-:0} xdotool search --name "${name}" 2>/dev/null | head -1 || true)
+    if [ -n "${w}" ]; then
+      DISPLAY=${FLY_DISPLAY:-:0} xdotool windowactivate "${w}" 2>/dev/null || true
+      DISPLAY=${FLY_DISPLAY:-:0} xdotool windowraise "${w}" 2>/dev/null || true
+    fi
+  done
+}
+
+# 停掉某类进程（按命令行正则匹配，不含自己）
+kill_by_cmd() {
+  local pat="$1" sig="${2:--TERM}" p
+  for p in $(ps -eo pid,args | awk -v pat="${pat}" '$0 ~ pat && !/awk/ {print $1}'); do
+    kill "${sig}" "${p}" 2>/dev/null || true
+  done
 }
 
 # ---------------------------------------------------------------- 动作
@@ -112,7 +177,7 @@ start)
     log "摇杆守护(50 Hz) 已启动（tmux: stick）"
   fi
   # 网页界面（可选，不影响终端飞）
-  if curl -fsS --max-time 2 http://127.0.0.1:8000/health >/dev/null 2>&1; then
+  if curl -fsS --noproxy "*" --max-time 2 http://127.0.0.1:8000/health >/dev/null 2>&1; then
     log "后端已在运行"
   else
     setsid "${WORKSPACE_ROOT}/install/flight_ui_cpp/lib/flight_ui_cpp/rc_server" \
@@ -126,10 +191,10 @@ start)
 stop)
   log "停止 ..."
   for s in stick tele; do tmux kill-session -t "$s" 2>/dev/null || true; done
-  for p in $(ps -eo pid,args | awk '/scripts\/(stick_keeper|telemetry_watch)\.py|flight_ui_cpp\/rc_server/ && !/awk/ {print $1}'); do
+  for p in $(ps -eo pid,args | awk '/scripts\/(stick_keeper|telemetry_watch|view3|link_monitor)\.py|flight_ui_cpp\/rc_server/ && !/awk/ {print $1}'); do
     kill "$p" 2>/dev/null || true
   done
-  for s in agent sitl stick gzgui web; do tmux kill-session -t "$s" 2>/dev/null || true; done
+  for s in agent sitl stick gzgui web cams; do tmux kill-session -t "$s" 2>/dev/null || true; done
   for p in $(ps -eo pid,args | awk '/gz sim -g/ && !/awk/ {print $1}'); do
     kill -9 "$p" 2>/dev/null || true
   done
@@ -152,6 +217,65 @@ status)
   python3 "${PROJECT_ROOT}/scripts/tstatus.py"
   ;;
 
+clean)
+  # PX4 的 .ulg 黑匣子日志是这台机器掉盘的唯一大坑，一步清掉
+  "${PROJECT_ROOT}/scripts/clean_logs.sh" "${@:2}"
+  ;;
+
+# ---------------------------------------------------------------- 前台控制台
+# 每个终端一个前台进程，日志直接打在你眼前；Ctrl-C 只停这一个。
+
+link)
+  # 接管 8888：tmux 里如果已经起了 agent，先请它退出，否则端口被占起不来
+  tmux kill-session -t agent 2>/dev/null || true
+  kill_by_cmd '[M]icroXRCEAgent'
+  sleep 1
+  log "① 通信连接  MicroXRCEAgent udp4 :8888（verbose）"
+  log "   下面持续打印 ROS 节点清单 + PX4 话题频率；Ctrl-C 停止"
+  python3 "${PROJECT_ROOT}/scripts/link_monitor.py" &
+  mon=$!
+  trap 'kill '"${mon}"' 2>/dev/null || true' EXIT
+  MicroXRCEAgent udp4 -p 8888 -v 4
+  ;;
+
+sim)
+  tmux kill-session -t sitl 2>/dev/null || true
+  kill_by_cmd '[p]x4_sitl_default/bin/px4' -9
+  kill_by_cmd '[g]z sim' -9
+  sleep 2
+  log "② 仿真  PX4 + Gazebo  世界 flow / 模型 x500_flow_depth"
+  if [ "${HEADLESS:-0}" = "1" ]; then
+    log "   HEADLESS=1（不开 3D 窗口，录片时用）"
+  else
+    log "   HEADLESS=0（带 Gazebo 3D 窗口）"
+  fi
+  HEADLESS="${HEADLESS:-0}" exec "${PROJECT_ROOT}/scripts/run_sitl_combined.sh"
+  ;;
+
+remote)
+  # 网页遥控：后端日志直接打在这个终端，顺便把浏览器打开
+  kill_by_cmd '[f]light_ui_cpp/rc_server'
+  sleep 1
+  log "③ 网页遥控  rc_server :8000"
+  open_browser
+  raise_windows
+  exec ros2 launch flight_ui remote.launch.py
+  ;;
+
+views)
+  if pgrep -f 'parameter_bridge.*IMX214' >/dev/null 2>&1; then
+    log "④ 相机桥已在运行"
+  else
+    tmux kill-session -t cams 2>/dev/null || true
+    tmux new-session -d -s cams \
+      "${ROS_ENV} && ros2 run ros_gz_bridge parameter_bridge ${CAM_TOPICS[*]} 2>&1 | tee /tmp/cams.log"
+    log "④ 相机桥已启动（tmux: cams）"
+    sleep 5
+  fi
+  log "   打开三视角窗口：第一人称 / 第三人称 / 俯视"
+  exec python3 "${PROJECT_ROOT}/scripts/view3.py" "${@:2}"
+  ;;
+
 gui)
   # 窗口进程必须用 tmux 托管：用 setsid & 起的进程会随命令结束被回收，
   # 表现为"窗口一闪就没了"。
@@ -171,31 +295,10 @@ gui)
   if pgrep -f 'snap/firefox.*--no-remote' >/dev/null 2>&1; then
     log "浏览器已在运行"
   else
-    profile="${HOME}/snap/firefox/common/flight_show_profile"
-    mkdir -p "${profile}"
-    grep -q 'sessionstore.resume_from_crash' "${profile}/user.js" 2>/dev/null || \
-      cat >> "${profile}/user.js" <<'JS'
-user_pref("browser.sessionstore.resume_from_crash", false);
-user_pref("browser.startup.page", 1);
-JS
-    rm -f "${profile}"/sessionstore* "${profile}"/recovery*.jsonlz4 2>/dev/null || true
-    log "启动浏览器 ..."
-    tmux kill-session -t web 2>/dev/null || true
-    tmux new-session -d -s web \
-      "DISPLAY=${FLY_DISPLAY:-:0} HOME=${HOME} \
-       firefox --no-remote --new-instance --profile ${profile} \
-       http://127.0.0.1:8000/ > /tmp/firefox.log 2>&1"
-    sleep 32
+    open_browser
   fi
 
-  # 置前，免得被 VS Code 挡在后面
-  for name in "Gazebo Sim" "PX4 Web RC"; do
-    w=$(DISPLAY=${FLY_DISPLAY:-:0} xdotool search --name "${name}" 2>/dev/null | head -1)
-    if [ -n "${w}" ]; then
-      DISPLAY=${FLY_DISPLAY:-:0} xdotool windowactivate "${w}" 2>/dev/null || true
-      DISPLAY=${FLY_DISPLAY:-:0} xdotool windowraise "${w}" 2>/dev/null || true
-    fi
-  done
+  raise_windows
 
   if pgrep -f 'gz sim -g' >/dev/null 2>&1 && pgrep -f 'snap/firefox.*--no-remote' >/dev/null 2>&1; then
     log "两个窗口都已就绪（Gazebo 3D + 浏览器）"

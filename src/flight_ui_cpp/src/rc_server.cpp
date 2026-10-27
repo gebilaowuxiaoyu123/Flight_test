@@ -392,6 +392,10 @@ void serveWebSocket(beast::tcp_stream stream,
     // 用文本帧。不设的话默认二进制帧，浏览器收到 Blob，前端 JSON.parse 会失败
     ws.text(true);
 
+    RCLCPP_INFO(rclcpp::get_logger("flight_ui"),
+                "[WS] 浏览器 #%lu 已连接（当前控制权归它）",
+                static_cast<unsigned long>(client_id));
+
     // ---- 写串行化 + 独立遥测推送 ----
     // Beast 同步流规则：同一连接允许 1 读 + 1 写并发，但绝不能 2 个写者。
     // 所以读循环回 ack、推送线程发遥测，全部走这把锁。
@@ -533,6 +537,8 @@ void serveWebSocket(beast::tcp_stream stream,
         pusher.join();
     }
     state.releaseClient(client_id);      // 断开就把控制权交出来
+    RCLCPP_INFO(rclcpp::get_logger("flight_ui"),
+                "[WS] 浏览器 #%lu 已断开", static_cast<unsigned long>(client_id));
 }
 
 void handleConnection(int fd, SharedState & state, const std::string & web_root,
@@ -715,6 +721,7 @@ int main(int argc, char ** argv)   // 装配 + spin
         }
     });
     RCLCPP_INFO(logger, "HTTP 服务已启动，监听端口 %d", port);
+    RCLCPP_INFO(logger, "网页遥控器： http://127.0.0.1:%d/", port);
 
     rclcpp::spin(node);
 
