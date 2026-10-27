@@ -223,7 +223,7 @@ private:
     mutable std::mutex telemetry_mutex_;
     uint64_t client_ = 0;            // 当前持有控制权的连接 id（0 = 没人）
     std::set<uint64_t> attached_;    // 还连着的网页（含只旁观的）
-    bool deadman_ = true;
+    bool deadman_ = false;
     double roll_ = 0.0;
     double pitch_ = 0.0;
     double yaw_ = 0.0;
