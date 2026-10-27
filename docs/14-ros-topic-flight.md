@@ -232,3 +232,23 @@ ros2 topic info /fmu/in/manual_control_input -v   # Publisher count 必须是 1
 flight status                                     # 模式/解锁/高度
 flight logs sitl                                  # PX4 里的 Preflight Fail 原因
 ```
+
+## 参数在哪改
+
+后端的可调参数都在 `src/flight_ui_cpp/config/flight_ui.yaml`，改完重启 `flight remote` 生效（不用重新编译）：
+
+| 参数 | 默认 | 作用 |
+|---|---|---|
+| `port` | 8000 | HTTP / WebSocket 端口 |
+| `takeoff_altitude_m` | 2.5 | 网页点"起飞"时的默认高度 |
+| `arm_retry_sec` | 10.0 | 解锁重试窗口（PX4 冷启动 EKF 收敛要十几秒） |
+| `control_rate_hz` | 50.0 | 杆量发布频率，PX4 要求 ≥ 10 Hz |
+| `telemetry_rate_hz` | 1.0 | 终端里那行 `armed=/nav_state=/alt=` 的频率 |
+
+临时覆盖（不改文件）：
+
+```bash
+ros2 launch flight_ui remote.launch.py port:=8010
+# 或者直接跑，参数用 --ros-args
+ros2 run flight_ui_cpp rc_server --ros-args -p takeoff_altitude_m:=1.5
+```

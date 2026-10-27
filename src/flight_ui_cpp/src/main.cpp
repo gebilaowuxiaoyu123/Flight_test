@@ -26,6 +26,7 @@
 #include <std_msgs/msg/float32.hpp>
 
 #include "flight_ui_cpp/command_sequence.hpp"
+#include "flight_ui_cpp/config.hpp"
 #include "flight_ui_cpp/control_lease.hpp"
 #include "flight_ui_cpp/http_server.hpp"
 #include "flight_ui_cpp/mode_tables.hpp"
@@ -36,6 +37,9 @@ int main(int argc, char ** argv)   // 装配 + spin
     rclcpp::init(argc, argv);
     auto node = rclcpp::Node::make_shared("flight_ui");
     auto logger = rclcpp::get_logger("flight_ui");
+
+    loadConfig(*node);                       // config/flight_ui.yaml → FlightUiConfig
+    const auto & cfg = config();
 
     const auto qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort();
 
@@ -83,7 +87,9 @@ int main(int argc, char ** argv)   // 装配 + spin
         "/fmu/in/vehicle_command", qos_in);
 
     // 1 Hz 日志：读一份快照打印（别在这里直接读成员变量）
-    auto timer = node->create_wall_timer(std::chrono::milliseconds(1000), [&, logger]() {
+    const auto telemetry_period = std::chrono::milliseconds(
+        static_cast<int>(1000.0 / cfg.telemetry_rate_hz));
+    auto timer = node->create_wall_timer(telemetry_period, [&, logger]() {
         const Json::Value t = state.getTelemetry();
         RCLCPP_INFO(logger, "armed=%s nav_state=%d alt=%.2f voltage=%.2f",
                     t["armed"].asBool() ? "Yes" : "No",
@@ -98,7 +104,9 @@ int main(int argc, char ** argv)   // 装配 + spin
     bool i_hold_lease = false;
 
     // 50 Hz：先从 state 取一份加锁快照，再在锁外发布
-    auto control_timer = node->create_wall_timer(std::chrono::milliseconds(20), [&]() {
+    const auto control_period = std::chrono::milliseconds(
+        static_cast<int>(1000.0 / cfg.control_rate_hz));
+    auto control_timer = node->create_wall_timer(control_period, [&]() {
         const auto c = state.control();
         const bool armed = state.armed();
 
@@ -157,7 +165,7 @@ int main(int argc, char ** argv)   // 装配 + spin
     });
 
     // -- HTTP 服务 --
-    const int port = 8000;   // 和 Python 版、verify.sh、ws_smoke_test.py 保持一致
+    const int port = cfg.port;        // 默认 8000，可在 config/flight_ui.yaml 改
 
     const int listen_fd = ::socket(AF_INET, SOCK_STREAM, 0);
     int yes = 1;

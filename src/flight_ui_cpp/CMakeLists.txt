@@ -24,7 +24,8 @@ add_executable(rc_server
   src/http_util.cpp
   src/ws_session.cpp
   src/http_server.cpp
-  src/control_lease.cpp)
+  src/control_lease.cpp
+  src/config.cpp)
 target_include_directories(rc_server PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -44,6 +45,10 @@ target_link_libraries(rc_server ${Boost_LIBRARIES} JsonCpp::JsonCpp)
 
 install(TARGETS rc_server
   DESTINATION lib/${PROJECT_NAME})
+
+install(DIRECTORY config
+  DESTINATION share/${PROJECT_NAME}
+)
 
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../flight_ui/web/
   DESTINATION share/${PROJECT_NAME}/web

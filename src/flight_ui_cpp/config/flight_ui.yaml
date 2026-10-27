@@ -1,0 +1,8 @@
+# 网页遥控后端的可调参数。改这里不用重新编译，重启 rc_server 即可。
+flight_ui:
+  ros__parameters:
+    port: 8000                 # HTTP / WebSocket 监听端口
+    takeoff_altitude_m: 2.5    # 网页点"起飞"时的默认高度
+    arm_retry_sec: 10.0        # 解锁重试窗口（PX4 冷启动 EKF 收敛要十几秒）
+    control_rate_hz: 50.0      # 杆量发布频率，PX4 要求 >= 10 Hz
+    telemetry_rate_hz: 1.0     # 终端里那行 armed=/nav_state=/alt= 的频率

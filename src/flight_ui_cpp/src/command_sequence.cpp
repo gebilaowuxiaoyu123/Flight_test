@@ -1,4 +1,5 @@
 #include "flight_ui_cpp/command_sequence.hpp"
+#include "flight_ui_cpp/config.hpp"
 
 #include <chrono>
 #include <thread>
@@ -60,7 +61,8 @@ void ensureManualMode(SharedState & state, rclcpp::Node * node,
 bool armWithRetry(SharedState & state, rclcpp::Node * node,
                   const rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr & cmd_pub)
 {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    const auto deadline = std::chrono::steady_clock::now()
+        + std::chrono::duration<double>(config().arm_retry_sec);
     while (std::chrono::steady_clock::now() < deadline) {
         sendCommand(cmd_pub, nowUs(node), 400, 1.0F);          // 400 = ARM_DISARM, param1=1 解锁
 

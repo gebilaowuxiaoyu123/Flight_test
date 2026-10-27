@@ -12,6 +12,7 @@
 #include <rclcpp/logging.hpp>
 
 #include "flight_ui_cpp/command_sequence.hpp"
+#include "flight_ui_cpp/config.hpp"
 #include "flight_ui_cpp/http_util.hpp"
 #include "flight_ui_cpp/mode_tables.hpp"
 
@@ -140,7 +141,8 @@ void serveWebSocket(beast::tcp_stream stream,
                 send_text(jsonString(ack));
             } else if (type == "arm" || type == "takeoff") {
                 const bool want_takeoff = (type == "takeoff");
-                const double altitude = root.get("altitude", 2.5).asDouble();
+                const double altitude =
+                    root.get("altitude", config().takeoff_altitude_m).asDouble();
                 const auto control = state.control();
 
                 Json::Value ack(Json::objectValue);
