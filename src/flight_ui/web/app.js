@@ -129,6 +129,7 @@
 
   $('arm').addEventListener('click', () => send({ type: 'arm' }));
   $('disarm').addEventListener('click', () => send({ type: 'disarm' }));
+  $('altctl').addEventListener('click', () => send({ type: 'mode', mode: 'ALTCTL' }));
   $('posctl').addEventListener('click', () => send({ type: 'mode', mode: 'POSCTL' }));
   $('takeoff').addEventListener('click', () => send({ type: 'takeoff', altitude: 2.5 }));
   $('land').addEventListener('click', () => send({ type: 'land' }));
