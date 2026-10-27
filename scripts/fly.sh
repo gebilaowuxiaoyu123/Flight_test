@@ -5,6 +5,8 @@
 #   ./scripts/fly.sh stop             全部停掉
 #   ./scripts/fly.sh status           看当前模式/解锁/高度
 #   ./scripts/fly.sh watch            终端实时刷新姿态（模式/横滚/俯仰/航向/速度）
+#   ./scripts/fly.sh gui              开 Gazebo 3D 窗口 + 浏览器（想亲眼看时用）
+#   ./scripts/fly.sh logs <名字>      看后台日志：agent / sitl / stick
 #   ./scripts/fly.sh mode ALTCTL      切模式
 #   ./scripts/fly.sh arm              解锁
 #   ./scripts/fly.sh takeoff          解锁并爬到 1.2 m
@@ -127,7 +129,19 @@ stop)
   for p in $(ps -eo pid,args | awk '/scripts\/(stick_keeper|telemetry_watch)\.py|flight_ui_cpp\/rc_server/ && !/awk/ {print $1}'); do
     kill "$p" 2>/dev/null || true
   done
-  for s in agent sitl; do tmux kill-session -t "$s" 2>/dev/null || true; done
+  for s in agent sitl stick gzgui web; do tmux kill-session -t "$s" 2>/dev/null || true; done
+  for p in $(ps -eo pid,args | awk '/gz sim -g/ && !/awk/ {print $1}'); do
+    kill -9 "$p" 2>/dev/null || true
+  done
+  # 浏览器也关掉（想留着看网页可加 --keep-browser）
+  if [ "${2:-}" != "--keep-browser" ]; then
+    for p in $(ps -eo pid,args | awk '/snap\/firefox.*--no-remote/ && !/awk/ {print $1}'); do
+      kill "$p" 2>/dev/null || true
+    done
+    for p in $(ps -eo pid,args | awk '/Xephyr :1/ && !/awk/ {print $1}'); do
+      kill "$p" 2>/dev/null || true
+    done
+  fi
   for p in $(ps -eo pid,cmd | awk '/px4_sitl_default\/bin\/px4|gz sim/ && !/awk/ {print $1}'); do
     kill -9 "$p" 2>/dev/null || true
   done
@@ -136,6 +150,68 @@ stop)
 
 status)
   python3 "${PROJECT_ROOT}/scripts/tstatus.py"
+  ;;
+
+gui)
+  # 窗口进程必须用 tmux 托管：用 setsid & 起的进程会随命令结束被回收，
+  # 表现为"窗口一闪就没了"。
+  if pgrep -f 'gz sim -g' >/dev/null 2>&1; then
+    log "Gazebo 3D 窗口已在运行"
+  else
+    log "启动 Gazebo 3D 窗口 ..."
+    tmux kill-session -t gzgui 2>/dev/null || true
+    tmux new-session -d -s gzgui \
+      "DISPLAY=${FLY_DISPLAY:-:0} __GLX_VENDOR_LIBRARY_NAME=nvidia \
+       __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json \
+       GZ_SIM_RESOURCE_PATH=${PROJECT_ROOT}/px4_overlay/models:${PROJECT_ROOT}/PX4-Autopilot/Tools/simulation/gz/models \
+       gz sim -g > /tmp/gzgui.log 2>&1"
+    sleep 28
+  fi
+
+  if pgrep -f 'snap/firefox.*--no-remote' >/dev/null 2>&1; then
+    log "浏览器已在运行"
+  else
+    profile="${HOME}/snap/firefox/common/flight_show_profile"
+    mkdir -p "${profile}"
+    grep -q 'sessionstore.resume_from_crash' "${profile}/user.js" 2>/dev/null || \
+      cat >> "${profile}/user.js" <<'JS'
+user_pref("browser.sessionstore.resume_from_crash", false);
+user_pref("browser.startup.page", 1);
+JS
+    rm -f "${profile}"/sessionstore* "${profile}"/recovery*.jsonlz4 2>/dev/null || true
+    log "启动浏览器 ..."
+    tmux kill-session -t web 2>/dev/null || true
+    tmux new-session -d -s web \
+      "DISPLAY=${FLY_DISPLAY:-:0} HOME=${HOME} \
+       firefox --no-remote --new-instance --profile ${profile} \
+       http://127.0.0.1:8000/ > /tmp/firefox.log 2>&1"
+    sleep 32
+  fi
+
+  # 置前，免得被 VS Code 挡在后面
+  for name in "Gazebo Sim" "PX4 Web RC"; do
+    w=$(DISPLAY=${FLY_DISPLAY:-:0} xdotool search --name "${name}" 2>/dev/null | head -1)
+    if [ -n "${w}" ]; then
+      DISPLAY=${FLY_DISPLAY:-:0} xdotool windowactivate "${w}" 2>/dev/null || true
+      DISPLAY=${FLY_DISPLAY:-:0} xdotool windowraise "${w}" 2>/dev/null || true
+    fi
+  done
+
+  if pgrep -f 'gz sim -g' >/dev/null 2>&1 && pgrep -f 'snap/firefox.*--no-remote' >/dev/null 2>&1; then
+    log "两个窗口都已就绪（Gazebo 3D + 浏览器）"
+  else
+    warn "有窗口没起来，看: tmux attach -t gzgui / tmux attach -t web"
+  fi
+  ;;
+
+logs)
+  name="${2:-}"
+  case "${name}" in
+    agent) tmux attach -t agent ;;
+    sitl)  tmux attach -t sitl ;;
+    stick) tmux attach -t stick ;;
+    *)     log "用法: ./scripts/fly.sh logs agent|sitl|stick"; log "或看文件: /tmp/flight_agent.log /tmp/flight_sitl.log /tmp/stick_keeper.log" ;;
+  esac
   ;;
 
 watch)
