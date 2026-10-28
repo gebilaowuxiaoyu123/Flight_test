@@ -59,3 +59,8 @@ remote() { "${FLIGHT_ROOT}/scripts/fly.sh" remote "$@"; }
 fly()       { "${FLIGHT_ROOT}/scripts/fly.sh" "$@"; }
 tele()      { "${FLIGHT_ROOT}/scripts/fly.sh" watch; }
 flystatus() { "${FLIGHT_ROOT}/scripts/fly.sh" status; }
+
+# Tab 补全（bash）：flight <Tab> / fly <Tab>
+if [ -n "${BASH_VERSION:-}" ] && [ -f "${FLIGHT_ROOT}/scripts/flight_completion.bash" ]; then
+  source "${FLIGHT_ROOT}/scripts/flight_completion.bash"
+fi

@@ -29,6 +29,18 @@ flight perc      # ⑤ 感知：min_depth(/obstacle_distance) + 光流 CSV（会
 | 四终端（推荐） | 上面四条，一条一个终端 | 每条一个终端，谁出问题一眼看出 |
 | 单终端 | `flight start` → `flight gui` → `flight views &` | 全挤在一个终端，`flight logs sitl` 另看 |
 
+**Tab 补全**：装好短命令后直接按 Tab——
+
+```bash
+flight <Tab>          # link sim remote views perc clean start stop status watch …
+flight <Tab><Tab>     # 顺便把 5 个控制台命令的用途列出来
+flight logs <Tab>     # agent sitl stick
+flight mode <Tab>     # MANUAL ALTCTL POSCTL AUTO ACRO OFFBOARD STABILIZED
+fly <Tab>             # 同上（fly 是 fly.sh 的直连入口）
+```
+
+实现在 `scripts/flight_completion.bash`，`flight_env.sh` 自动 source；纯 bash 方案，不依赖 bash-completion 包。
+
 `flight`（不带词）= `start` 的前台版：agent + PX4 + 摇杆守护 + 后端挤在一个终端，
 Ctrl-C 一起停；`start` 是同一个东西丢进 tmux，终端立刻还给你。
 
