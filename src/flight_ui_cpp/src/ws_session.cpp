@@ -1,3 +1,7 @@
+// ws_session.cpp —— 一个 WebSocket 会话：收前端 JSON（摇杆/命令）、回遥测和 ack
+// 对外：serveWebSocket()
+// 依赖：SharedState（状态）、command_sequence（发命令）、mode_tables（切模式）
+
 #include "flight_ui_cpp/ws_session.hpp"
 
 #include <atomic>
@@ -29,6 +33,7 @@ void serveWebSocket(beast::tcp_stream stream,
     // 超时：客户端拔网线时 read 会永远阻塞，线程就泄漏了
     ws.set_option(websocket::stream_base::timeout::suggested(beast::role_type::server));
 
+    // ---- 握手 ----
     ws.accept(req);        // 握手：校验请求头 + 回 101
 
     // 用文本帧。不设的话默认二进制帧，浏览器收到 Blob，前端 JSON.parse 会失败

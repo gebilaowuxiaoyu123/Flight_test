@@ -1,3 +1,7 @@
+// control_lease.cpp —— 控制权租约（网页后端 vs 终端摇杆守护，同一时刻只有一方发杆量）
+// 对外：control_lease::acquire / release / read
+// 约定：/tmp/flight_control.lease 内容 <owner> <prio> <pid> <unix_ms>，tmp+rename 原子写
+
 #include "flight_ui_cpp/control_lease.hpp"
 
 #include <unistd.h>

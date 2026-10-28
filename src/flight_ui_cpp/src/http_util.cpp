@@ -1,3 +1,7 @@
+// http_util.cpp —— 三个小工具：JSON 序列化、整文件读入、按后缀给 MIME
+// 对外：jsonString / readFile / contentTypeOf
+// 依赖：只用标准库 + jsoncpp，不碰 ROS
+
 #include "flight_ui_cpp/http_util.hpp"
 
 #include <fstream>

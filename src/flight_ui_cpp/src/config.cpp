@@ -1,3 +1,7 @@
+// config.cpp —— 把 config/flight_ui.yaml 读进 FlightUiConfig
+// 对外：loadConfig() / config()
+// 说明：全局一份；HTTP 线程、WS 会话、定时器都要读，逐层传参不划算
+
 #include "flight_ui_cpp/config.hpp"
 
 #include <algorithm>

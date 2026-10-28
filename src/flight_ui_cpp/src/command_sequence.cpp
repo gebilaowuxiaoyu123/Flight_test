@@ -1,3 +1,8 @@
+// command_sequence.cpp —— PX4 命令时序（解锁重试 / 切模式 / 起飞 / 降落 / 急停）
+// 对外：sendCommand / nowUs / ensureManualMode / armWithRetry / armSequence /
+//       takeoffSequence / landNow / killNow
+// 依赖：SharedState（读 armed / nav_state）、config()（重试窗口、默认起飞高度）
+
 #include "flight_ui_cpp/command_sequence.hpp"
 #include "flight_ui_cpp/config.hpp"
 
@@ -6,6 +11,7 @@
 
 #include <rclcpp/logging.hpp>
 
+// ---- 命令发送 ----
 // 发一条 VehicleCommand。所有命令都走这里，字段填法只写一次。
 // 命令号：400=解锁/上锁，176=切模式，22=起飞，21=降落，185=飞行终止
 void sendCommand(const rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr & pub,
@@ -28,6 +34,7 @@ void sendCommand(const rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedP
     pub->publish(msg);
 }
 
+// ---- 时间与模式工具 ----
 uint64_t nowUs(rclcpp::Node * node)   // 当前时间（微秒），PX4 消息统一用微秒
 {
     return static_cast<uint64_t>(node->get_clock()->now().nanoseconds() / 1000);
@@ -47,6 +54,7 @@ void sleepMs(int ms)
 }
 
 // 当前不是手动模式就先切 POSCTL，并等它生效
+// ---- 解锁 / 起飞 / 降落时序 ----
 void ensureManualMode(SharedState & state, rclcpp::Node * node,
                       const rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr & cmd_pub)
 {

@@ -1,3 +1,7 @@
+// http_server.cpp —— 每个 TCP 连接一个线程：先读 HTTP 头，再决定升级 WebSocket 还是回文件
+// 对外：handleConnection()
+// 依赖：http_util（json / 读文件 / MIME）、ws_session（升级后整条连接交给它）
+
 #include "flight_ui_cpp/http_server.hpp"
 
 #include <atomic>
@@ -44,6 +48,7 @@ void handleConnection(int fd, SharedState & state, const std::string & web_root,
         http::read(stream, buffer, req);
 
         // 读到了一个完整的 HTTP 请求头。判断它是不是想升级成 WebSocket
+        // ---- WebSocket 升级 ----
         if (websocket::is_upgrade(req)) {
             serveWebSocket(std::move(stream), std::move(req), state, node, cmd_pub, client_id);
             return;                        // 连接已被 WS 接管，HTTP 分支不再执行
@@ -54,6 +59,7 @@ void handleConnection(int fd, SharedState & state, const std::string & web_root,
         res.set(http::field::server, "FlightUI");
         res.keep_alive(false);
 
+        // ---- 普通 HTTP：/health + 静态文件 ----
         const std::string target(req.target());
         if (target == "/health") {
             Json::Value root(Json::objectValue);

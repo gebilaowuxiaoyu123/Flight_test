@@ -1,4 +1,7 @@
-// rc_server 主程序：装配节点、订阅遥测、起 50 Hz 杆量发布和 HTTP 服务。
+// main.cpp —— rc_server 主程序：装配节点、订阅遥测、50 Hz 发杆量、起 HTTP 服务
+// 对外：进程入口（参数来自 config/flight_ui.yaml）
+// 依赖：以上所有模块；6 个编译单元里只有这里知道全貌
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -43,6 +46,7 @@ int main(int argc, char ** argv)   // 装配 + spin
 
     const auto qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort();
 
+    // ---- 共享状态与前端路径 ----
     // 跨线程共享的数据全放这里，不再有裸变量
     SharedState state;
 
@@ -51,6 +55,7 @@ int main(int argc, char ** argv)   // 装配 + spin
         ament_index_cpp::get_package_share_directory("flight_ui_cpp") + "/web";
     RCLCPP_INFO(logger, "静态资源目录：%s", web_root.c_str());
 
+    // ---- 订阅遥测 ----
     auto status_sub = node->create_subscription<px4_msgs::msg::VehicleStatus>(
         "/fmu/out/vehicle_status_v1", qos,
         [&](const px4_msgs::msg::VehicleStatus::SharedPtr msg) {
@@ -78,6 +83,7 @@ int main(int argc, char ** argv)   // 装配 + spin
             state.setObstacle(msg->data);
         });
 
+    // ---- 发布者 ----
     const auto qos_in = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
     auto manual_pub = node->create_publisher<px4_msgs::msg::ManualControlSetpoint>(
         "/fmu/in/manual_control_input", qos_in);
@@ -86,6 +92,7 @@ int main(int argc, char ** argv)   // 装配 + spin
     auto cmd_pub = node->create_publisher<px4_msgs::msg::VehicleCommand>(
         "/fmu/in/vehicle_command", qos_in);
 
+    // ---- 定时器：1 Hz 日志 + 50 Hz 杆量 ----
     // 1 Hz 日志：读一份快照打印（别在这里直接读成员变量）
     const auto telemetry_period = std::chrono::milliseconds(
         static_cast<int>(1000.0 / cfg.telemetry_rate_hz));

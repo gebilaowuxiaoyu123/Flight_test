@@ -1,3 +1,7 @@
+// mode_tables.cpp —— 两张模式表：读方向（nav_state → 名字）和写方向（名字 → 主模式号）
+// 对外：modeNameOf / mainModeOf
+// 注意：这两套编号不是同一套，数值不能互相套用
+
 #include "flight_ui_cpp/mode_tables.hpp"
 
 // PX4 的 nav_state 数字 → 人看的模式名（和 Python 版 telemetry.py 完全一致）
