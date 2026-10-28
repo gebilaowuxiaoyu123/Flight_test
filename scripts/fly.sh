@@ -220,6 +220,9 @@ start)
     kill -9 "$p" 2>/dev/null || true
   done
   sleep 1
+  # 启动前先把杆量文件写回中位：否则守护一上来就沿用上次遗留的杆量
+  # （实测被遗留的 pitch 0.45 直接带飞，飞到 1 km 外）
+  neutral
   # 用 tmux 托管：和 agent/sitl 一致，不会随终端退出被回收
   tmux new-session -d -s stick \
     "python3 ${PROJECT_ROOT}/scripts/stick_keeper.py > ${KEEPER_LOG} 2>&1"

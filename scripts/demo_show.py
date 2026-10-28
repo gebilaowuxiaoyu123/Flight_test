@@ -214,7 +214,7 @@ CAM_TOPICS = {
 }
 
 
-def read_true_pose(max_age=0.4):
+def read_true_pose(max_age=1.0):
     """读 scripts/pose_writer.py 写的 Gazebo 真实位姿。
 
     无 GPS + 光流时 PX4 的位置估计会漂（实测 1~2 m），拿它做闭环会让
@@ -396,7 +396,7 @@ class Overlay:
             self._panel(d, col)
         self._pad_body(d)
         d.text((self.COL_B[0] + 12, 26), '姿态', font=self.f_small, fill=DIM)
-        d.text((self.COL_C[0] + 12, 26), '航迹（俯视 / 米）', font=self.f_small, fill=DIM)
+        d.text((self.COL_C[0] + 12, 26), '航迹（俯视 / 米，Gazebo 真值）', font=self.f_small, fill=DIM)
         return img
 
     def _pad_body(self, d: ImageDraw.ImageDraw):
@@ -450,30 +450,34 @@ class Overlay:
         x0, x1 = self.COL_C[0] + 14, self.COL_C[1] - 14
         y0, y1 = 44, PANEL_H - 30
         cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-        scale = 52.0     # 像素 / 米（场地小，放大才看得清 8 字）
+        # 像素/米：默认放大看清楚 8 字；轨迹跑远了自动缩小，别让航迹甩出面板
+        maxr = max([math.hypot(px, py) for px, py in path[-6000:]] + [1.0])
+        scale = min(52.0, (min(x1 - x0, y1 - y0) / 2 - 8) / maxr)
+        scale = max(scale, 6.0)
+        # 网格取整数米
+        step_m = 1 if scale >= 34 else 2 if scale >= 17 else 5
 
-        for g in range(-4, 5):
-            gx, gy = cx + g * scale, cy - g * scale
+        for g in range(-8, 9):
+            gx, gy = cx + g * step_m * scale, cy - g * step_m * scale
             if x0 <= gx <= x1:
                 d.line([(gx, y0), (gx, y1)], fill=(36, 42, 54))
             if y0 <= gy <= y1:
                 d.line([(x0, gy), (x1, gy)], fill=(36, 42, 54))
         d.line([(cx, y0), (cx, y1)], fill=(60, 68, 86))
         d.line([(x0, cy), (x1, cy)], fill=(60, 68, 86))
-        d.text((x1 - 4, 50), '1 格 = 1 m', font=self.f_small, fill=DIM, anchor='ra')
+        d.text((x1 - 4, 50), f'1 格 = {step_m} m', font=self.f_small, fill=DIM, anchor='ra')
 
-        pts = [(cx + px * scale, cy - py * scale) for px, py in path[-3000:]]
+        pts = [(cx + px * scale, cy - py * scale) for px, py in path[-6000:]]
         pts = [(x, y) for x, y in pts if x0 - 40 <= x <= x1 + 40 and y0 - 40 <= y <= y1 + 40]
         if len(pts) > 1:
             d.line(pts, fill=ACCENT, width=3)
 
-        tx, ty = cx + tgt_x * scale, cy - tgt_y * scale
-        d.ellipse((tx - 9, ty - 9, tx + 9, ty + 9), outline=AMBER, width=2)
+        # 目标点用的是 PX4 估计系、轨迹是真值系，两者能差 3 倍，画在一起会误导 → 不画
         px, py = cx + cur_x * scale, cy - cur_y * scale
         d.ellipse((px - 7, py - 7, px + 7, py + 7), fill=GREEN)
         d.line([(px, py), (px + math.cos(heading) * 26, py - math.sin(heading) * 26)],
                fill=GREEN, width=4)
-        d.text((x1 - 4, y1 + 4), '● 机体   ○ 目标', font=self.f_small,
+        d.text((x1 - 4, y1 + 4), '● 机体（Gazebo 真值）', font=self.f_small,
                fill=DIM, anchor='ra')
 
     def render(self, st, ctrl, sticks, tel, path, stage, stage_i, total,
@@ -507,7 +511,14 @@ class Overlay:
         d.text((828, 299), f'{math.degrees(st.heading) % 360:.0f}°', font=self.f_txt, fill=FG)
 
         # ---- 航迹（相对起点）----
-        self._map(d, path, st.x - getattr(st, 'x0', 0.0), st.y - getattr(st, 'y0', 0.0),
+        # 无 GPS 时 PX4 的 vehicle_local_position.xy 没有外部观测源，
+        # 实测同一段机动只估出真值的 1/3（2.98 m vs 9.18 m），
+        # 所以这里优先用 Gazebo 真值（pose_writer.py），没有才退回估计值。
+        if getattr(st, 'true_rel', None) is not None:
+            cur_x, cur_y = st.true_rel
+        else:
+            cur_x, cur_y = st.x - getattr(st, 'x0', 0.0), st.y - getattr(st, 'y0', 0.0)
+        self._map(d, path, cur_x, cur_y,
                   ctrl.tx - getattr(st, 'x0', 0.0), ctrl.ty - getattr(st, 'y0', 0.0),
                   st.heading)
 
@@ -753,6 +764,8 @@ def main():
     mission = build_mission(x0, y0, 0.0)
     total = len(mission)
     path = [(0.0, 0.0)]
+    true0 = [None, None]          # Gazebo 真值起点（世界系），用于相对航迹
+    true_last = [None, None]      # 最近一次真值相对位置
     log = open('/tmp/flight_show_log.jsonl', 'w')
 
     ff = None
@@ -866,9 +879,21 @@ def main():
                     last_arm = time.time()
                 apply(roll, pitch, yaw, thr)
 
-                rel = (pos.x - x0, pos.y - y0)
+                # 真值优先；读不到就沿用上一个真值点（绝不和 PX4 估计混画）
+                tp = read_true_pose()
+                if tp is not None:
+                    if true0[0] is None:
+                        true0[0], true0[1] = tp['x'], tp['y']
+                    true_last[0], true_last[1] = tp['x'] - true0[0], tp['y'] - true0[1]
+                if true_last[0] is not None:
+                    rel = (true_last[0], true_last[1])
+                    st.true_rel = rel
+                else:
+                    rel = (pos.x - x0, pos.y - y0)
                 if not path or math.hypot(rel[0] - path[-1][0], rel[1] - path[-1][1]) > 0.05:
                     path.append(rel)
+                if len(path) > 6000:      # 降采样保留全程，别把开头丢掉
+                    path[:] = path[::2]
                 if log:
                     log.write(json.dumps({
                         't': round(now - t_start, 3), 'stage': mg['name'],
