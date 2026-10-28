@@ -83,6 +83,33 @@ arming_state() {
     | awk '/^arming_state:/ {print $2; exit}'
 }
 
+# 当前控制权归谁（读租约，考虑 2 s 过期和 pid 是否还活着）
+control_owner() {
+  [ -f /tmp/flight_control.lease ] || { echo ""; return; }
+  local owner="" prio="" pid="" ts=""
+  read -r owner prio pid ts < /tmp/flight_control.lease || true
+  local now_ms
+  now_ms=$(date +%s%3N)
+  if [ -n "${ts:-}" ] && [ $(( now_ms - ts )) -lt 2000 ] \
+     && [ -n "${pid:-}" ] && kill -0 "${pid}" 2>/dev/null; then
+    echo "${owner}"
+  else
+    echo ""
+  fi
+}
+
+# 打杆类动作（起飞/平移/升降/转向）依赖 stick_keeper 发杆量。
+# 如果控制权在网页手里，守护是暂停的 —— 这时命令会"看着成功其实没动"，
+# 所以直接拒绝并说清原因。
+require_terminal_control() {
+  local o
+  o=$(control_owner)
+  if [ -n "${o}" ] && [ "${o}" != "terminal" ]; then
+    die "控制权在 ${o}（网页还连着），终端打杆不会生效。
+     要么关掉网页窗口，要么 flight stop 再 flight start"
+  fi
+}
+
 need_keeper() {
   pgrep -f 'stick_keeper.py' >/dev/null 2>&1 \
     || die "摇杆守护没在跑，先执行: ./scripts/fly.sh start"
@@ -391,6 +418,7 @@ mode)
     *) die "未知模式: ${want}（可用 MANUAL/ALTCTL/POSCTL/AUTO/ACRO/OFFBOARD/STABILIZED）";;
   esac
   need_keeper
+  require_terminal_control
   set_stick 0 0 0 -1
   pub_cmd 176 1.0 "${id}"
   sleep 1.5
@@ -399,6 +427,7 @@ mode)
 
 arm)
   need_keeper
+  require_terminal_control
   set_stick 0 0 0 -1                  # 解锁必须油门最低
   sleep 0.3
   for _ in $(seq 1 8); do        # 冷启动 EKF 收敛要十几秒，多试几次
@@ -412,6 +441,7 @@ arm)
 takeoff)
   target="${2:-1.2}"
   need_keeper
+  require_terminal_control
   set_stick 0 0 0 -1
   sleep 0.3
   for _ in $(seq 1 8); do        # 冷启动 EKF 收敛要十几秒，多试几次
@@ -439,6 +469,7 @@ takeoff)
 up|down|fwd|back|left|right|spin)
   dur="${2:-2}"
   need_keeper
+  require_terminal_control
   case "$1" in
     up)    hold "${dur}" 0 0 0 0.40 ;;
     down)  hold "${dur}" 0 0 0 -0.40 ;;
@@ -455,6 +486,9 @@ up|down|fwd|back|left|right|spin)
 
 land)
   need_keeper
+  if [ "$(control_owner)" != "terminal" ] && [ -n "$(control_owner)" ]; then
+    warn "控制权在 $(control_owner)，降落仍会执行（NAV_LAND 是命令，不依赖杆量）"
+  fi
   # 用 PX4 自带的 NAV_LAND(21)：它自己管下降曲线和落地检测，
   # 比"手动压油门到底"稳得多（后者触地后会把飞机弹起来，导致上锁被拒）。
   pause_sticks          # 降落期间别打杆，否则 PX4 会退出 AUTO_LAND
