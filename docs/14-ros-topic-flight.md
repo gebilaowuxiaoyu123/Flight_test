@@ -18,9 +18,23 @@ flight sim       # ② 仿真：PX4 + Gazebo 3D 窗口
 flight remote    # ③ 网页遥控：rc_server 日志 + 自动开浏览器
 flight views     # ④ 三视角：第一人称 / 第三人称 / 俯视
 flight perc      # ⑤ 感知：min_depth(/obstacle_distance) + 光流 CSV（会自动桥深度图）
+flight record    # ⑥ 录 180 s 成片（三视角 + 深度 + 光流画中画）
 ```
 
 每条都是前台进程，Ctrl-C 只停这一个。顺序 ①→②→③→④。
+
+**录制时选传感器**（组里要求视频里体现光流和深度相机，但不必每次都录）：
+
+```bash
+flight record              # = depth,flow，四路画中画
+flight record none         # 只录三视角，相机桥也只建 3 路
+flight record depth        # 三视角 + 深度相机
+flight record flow         # 三视角 + 光流（下视）
+```
+
+`--sensors` 传的是逗号分隔的名字，底层直接调
+`./scripts/run_show.sh --record --sensors <...>`；关掉的那一路**连 GZ→ROS 相机桥都不建**，
+不会白占 CPU 和 DDS 带宽。
 
 **必须开四个终端吗？** 不一定，两种都行：
 

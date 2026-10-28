@@ -47,7 +47,7 @@ src/flight_perception_cpp/    ← C++ 感知（两个可执行，合计 193 行�
 
 scripts/                      ← 运维脚本
 ├── run_show.sh          一条命令起录制链路（本机实测可用）
-├── demo_show.py         飞行演出 + 三视角合成录制
+├── demo_show.py         飞行演出 + 多视角合成录制（含深度/光流画中画）
 ├── cam_follow.py        跟拍/俯视相机（gz set_pose）
 ├── pose_writer.py       写 Gazebo 真实位姿给相机用
 ├── rerender_panel.py    用日志重渲染下半屏（不必重飞）
@@ -175,9 +175,18 @@ flight land      # 降落并上锁
 
 ```bash
 ./scripts/run_show.sh              # 起全部服务，浏览器访问 http://127.0.0.1:8000/
-./scripts/run_show.sh --record     # 起服务并录 180 s 成片
+./scripts/run_show.sh --record     # 起服务并录 180 s 成片（默认带深度 + 光流）
 ./scripts/run_show.sh --stop       # 停止
+
+# 传感器画中画可开关，关掉的连相机桥都不建（省 CPU / DDS 带宽）
+./scripts/run_show.sh --record --sensors none     # 只录三视角
+./scripts/run_show.sh --record --sensors depth    # 三视角 + 深度相机
+./scripts/run_show.sh --record --sensors flow     # 三视角 + 光流（下视）
 ```
+
+成片布局：主画面 = 跟拍第三人称；底部四路画中画
+`① 第一视角 / ② 俯视 / ③ 深度相机 / ④ 光流（下视）`；
+`--sensors` 关掉谁就少哪一路，画中画自动排布。
 
 改过代码之后要先编译（**必须在工作区根目录**）：
 

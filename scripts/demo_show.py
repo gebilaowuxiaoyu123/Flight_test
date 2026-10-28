@@ -28,7 +28,7 @@ import time
 
 import rclpy
 from PIL import Image, ImageDraw, ImageFont
-from px4_msgs.msg import VehicleAttitude, VehicleLocalPosition
+from px4_msgs.msg import VehicleAttitude, VehicleLocalPosition, VehicleOpticalFlow
 from sensor_msgs.msg import Image as RosImage
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
@@ -36,9 +36,12 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 # ---------------------------------------------------------------- 画面参数
 W, H = 1920, 1080
 PANEL_H = 360        # 下半屏：手柄 + 航迹 + 遥测
-PIP_W, PIP_H = 480, 270
-PIP_FPV = (0, 720 - PIP_H)              # 第一视角（左下角）
-PIP_TOP = (1280 - PIP_W, 720 - PIP_H)   # 俯视（右下角）
+# 四路画中画在 1280 宽的主画面上排一行：320×180 × 4 = 1280
+PIP_W, PIP_H = 320, 180
+PIP_FPV = (0 * PIP_W, 720 - PIP_H)      # ① 第一视角
+PIP_TOP = (1 * PIP_W, 720 - PIP_H)      # ② 俯视
+PIP_DEPTH = (2 * PIP_W, 720 - PIP_H)    # ③ 深度相机（彩色图 + 最近距离）
+PIP_FLOW = (3 * PIP_W, 720 - PIP_H)     # ④ 光流（下视原图 + 箭头）
 FPS = 25
 
 FONT_PATH = '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc'
@@ -157,10 +160,16 @@ class FlightState:
         self.heading = 0.0
         self.roll = self.pitch = 0.0
         self.fresh = 0.0
+        # 光流：PX4 内部用下视相机算出来的像素位移（px/s）+ 质量 + 测距
+        self.flow_x = self.flow_y = 0.0   # 光流角速度（°/s）
+        self.flow_quality = 0
+        self.flow_distance = -1.0
         self.node.create_subscription(VehicleLocalPosition,
                                       '/fmu/out/vehicle_local_position', self._on_pos, qos)
         self.node.create_subscription(VehicleAttitude,
                                       '/fmu/out/vehicle_attitude', self._on_att, qos)
+        self.node.create_subscription(VehicleOpticalFlow,
+                                      '/fmu/out/vehicle_optical_flow', self._on_flow, qos)
         threading.Thread(target=self._spin, daemon=True).start()
 
     def _spin(self):
@@ -181,6 +190,14 @@ class FlightState:
         self.roll = math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
         self.pitch = math.asin(clamp(2 * (w * y - z * x), -1.0, 1.0))
 
+    def _on_flow(self, m):
+        # pixel_flow 是「积分角度」(rad)，除以积分时长才得到角速度（°/s）
+        dt = max(1e-4, float(m.integration_timespan_us) * 1e-6)
+        self.flow_x = math.degrees(float(m.pixel_flow[0]) / dt)
+        self.flow_y = math.degrees(float(m.pixel_flow[1]) / dt)
+        self.flow_quality = int(m.quality)
+        self.flow_distance = float(m.distance_m)
+
     @property
     def alt(self):
         return -self.z
@@ -190,6 +207,10 @@ CAM_TOPICS = {
     'third': '/world/flow/model/cam_third/link/link/sensor/third_cam/image',
     'fpv': '/world/flow/model/x500_flow_depth_0/link/camera_link/sensor/IMX214/image',
     'top': '/world/flow/model/cam_top/link/link/sensor/top_cam/image',
+    # 光流用的下视相机：光流算法就是在它画面上算像素位移
+    'down': '/world/flow/model/x500_flow_depth_0/link/camera_link/sensor/down_cam/image',
+    # 深度相机（32FC1）：由 run_show.sh 里的 ros_gz_bridge 桥过来
+    'depth': '/depth_camera',
 }
 
 
@@ -213,24 +234,69 @@ def read_true_pose(max_age=0.4):
 class CameraFeed:
     """订阅三路机载/机外相机，缓存最近一帧 PIL 图。"""
 
+    # 深度图的伪彩色量程（米）：近=红，远=蓝
+    DEPTH_NEAR, DEPTH_FAR = 0.2, 6.0
+
     def __init__(self):
         self.latest = {k: None for k in CAM_TOPICS}
+        self.depth_min = -1.0          # 画面中央最近距离（米），-1 表示没数据
         self.qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         self._node = None
 
-    def attach(self, node):
+    def attach(self, node, keys=None):
+        """keys=None 表示全部订阅；否则只订阅用得到的那几路（省 CPU）。"""
         self._node = node
         for key, topic in CAM_TOPICS.items():
+            if keys is not None and key not in keys:
+                continue
             node.create_subscription(
                 RosImage, topic, lambda m, k=key: self._on(m, k), self.qos)
 
     def _on(self, msg, key):
+        if key == 'depth':
+            self._on_depth(msg)
+            return
+        encoding = msg.encoding.lower()
+        mode = {'rgb8': 'RGB', 'bgr8': 'RGB', 'rgba8': 'RGBA', 'bgra8': 'RGBA'}.get(encoding)
+        if mode != 'RGB':
+            return
         try:
             img = Image.frombytes('RGB', (msg.width, msg.height),
                                   bytes(msg.data), 'raw', 'RGB')
         except Exception:
             return
         self.latest[key] = img
+
+    def _on_depth(self, msg):
+        """32FC1 深度图 → 伪彩色（近红远蓝），顺手记中央区域的最近距离。"""
+        import numpy as np
+
+        try:
+            buf = np.frombuffer(bytes(msg.data), dtype=np.float32)
+        except Exception:
+            return
+        w, h = msg.width, msg.height
+        if buf.size < w * h:
+            return
+        depth = buf[:w * h].reshape(h, w)
+
+        # 中央 ROI：宽度 50%、高度 60%（和 min_depth.cpp 的口径一致）
+        x0, x1 = int(w * 0.25), int(w * 0.75)
+        y0, y1 = int(h * 0.2), int(h * 0.8)
+        roi = depth[y0:y1, x0:x1]
+        valid = roi[np.isfinite(roi) & (roi > 0.0)]
+        self.depth_min = float(valid.min()) if valid.size else -1.0
+
+        # 归一化：越近越"热"
+        near, far = self.DEPTH_NEAR, self.DEPTH_FAR
+        v = np.nan_to_num(depth, nan=far, posinf=far, neginf=far)
+        v = np.clip(v, near, far)
+        t = 1.0 - (v - near) / (far - near)              # 1=近, 0=远
+        rgb = np.zeros((h, w, 3), dtype=np.uint8)
+        rgb[..., 0] = (255 * t).astype(np.uint8)          # R
+        rgb[..., 1] = (90 * t + 40 * (1 - t)).astype(np.uint8)
+        rgb[..., 2] = (60 * t + 255 * (1 - t)).astype(np.uint8)
+        self.latest['depth'] = Image.fromarray(rgb, 'RGB')
 
     def get(self, key, size=None):
         img = self.latest.get(key)
@@ -508,18 +574,49 @@ def figure8(center_x, center_y, u, amp=1.9, span=1.3):
             center_y + span * math.sin(u) * math.cos(u))
 
 
+class _FramesDone(Exception):
+    """--frames 达到上限时用来跳出整场（break 只能跳出内层循环）。"""
+
+
+def crop_center(im, keep=0.84):
+    """裁掉外圈（下视相机会扫到机臂/桨），保持尺寸不变。"""
+    w, h = im.size
+    nw, nh = int(w * keep), int(h * keep)
+    box = ((w - nw) // 2, (h - nh) // 2, (w + nw) // 2, (h + nh) // 2)
+    return im.crop(box).resize((w, h), Image.BILINEAR)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--record', default='')
     ap.add_argument('--dry-run', action='store_true')
     ap.add_argument('--grab', default=':1.0+0,0')
     ap.add_argument('--duration', type=int, default=180)
+    ap.add_argument('--sensors', default='depth,flow',
+                    help='要显示哪几路传感器画中画：depth,flow / none / depth / flow')
+    ap.add_argument('--frames', type=int, default=0,
+                    help='渲染 N 帧后退出（0=跑完整场），便于快速验证画面')
     args = ap.parse_args()
+
+    # 传感器画中画开关：--sensors depth,flow / none / depth / flow
+    wanted = {t.strip().lower() for t in args.sensors.split(',') if t.strip()}
+    if 'none' in wanted:
+        wanted = set()
+    show_depth = 'depth' in wanted
+    show_flow = 'flow' in wanted
 
     ws = WSClient()
     st = FlightState()
     cams = CameraFeed()
-    cams.attach(st.node)
+    # 只订阅真正要显示的那几路，关掉的连 DDS 流量都省了
+    extra = set()
+    if show_depth:
+        extra.add('depth')
+    if show_flow:
+        extra.add('down')
+    cams.attach(st.node, keys={'third', 'fpv', 'top'} | extra)
+    print('传感器画中画：深度=%s 光流=%s' % ('开' if show_depth else '关',
+                                            '开' if show_flow else '关'), flush=True)
     ctrl = Controller()
     ov = Overlay()
 
@@ -542,14 +639,40 @@ def main():
     canvas = Image.new('RGB', (W, H), (12, 14, 18))   # 整帧画布，网页那块留黑给 ffmpeg 叠
     pip_font = font(18, True)
 
-    def draw_pip(im, pos, caption):
+    def draw_pip(im, pos, caption, footer=None):
         """贴一个画中画并加边框+标题，让小窗口和主画面分得开。"""
         canvas.paste(im, pos)
         d = ImageDraw.Draw(canvas)
         x, y = pos
         d.rectangle((x, y, x + PIP_W - 1, y + PIP_H - 1), outline=(90, 200, 255), width=2)
-        d.rectangle((x, y, x + 132, y + 26), fill=(10, 12, 16))
+        d.rectangle((x, y, x + 140, y + 26), fill=(10, 12, 16))
         d.text((x + 8, y + 4), caption, font=pip_font, fill=(150, 215, 255))
+        if footer:
+            d.rectangle((x, y + PIP_H - 26, x + PIP_W - 1, y + PIP_H - 1), fill=(10, 12, 16))
+            d.text((x + 8, y + PIP_H - 23), footer, font=pip_font, fill=(230, 236, 244))
+        return d
+
+    def draw_flow_arrow(d, pos, fx, fy):
+        """在光流小窗里画箭头：指向画面纹理移动方向，长度随角速度（°/s）变化。"""
+        x, y = pos
+        cx, cy = x + PIP_W // 2, y + PIP_H // 2 + 10
+        d.line(((cx - 40, cy), (cx + 40, cy)), fill=(60, 66, 82), width=1)
+        d.line(((cx, cy - 40), (cx, cy + 40)), fill=(60, 66, 82), width=1)
+        # 悬停时几 °/s，机动时几十 °/s；取负号 = 相机转动方向反推画面移动方向
+        vx = max(-70.0, min(70.0, -fx * 2.5))
+        vy = max(-70.0, min(70.0, -fy * 2.5))
+        if abs(vx) < 2 and abs(vy) < 2:
+            d.ellipse((cx - 4, cy - 4, cx + 4, cy + 4), outline=(120, 200, 255))
+            return
+        tip = (cx + vx, cy + vy)
+        d.line(((cx, cy), tip), fill=(255, 210, 90), width=4)
+        # 箭头两个翼
+        import math as _m
+        ang = _m.atan2(vy, vx)
+        for da in (2.6, -2.6):
+            d.line((tip, (tip[0] + 12 * _m.cos(ang + da),
+                          tip[1] + 12 * _m.sin(ang + da))),
+                   fill=(255, 210, 90), width=4)
 
     # 摇杆上行走独立线程，永远 50Hz（服务端 300ms 无帧就判使能失效）
     sp = {'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0, 'throttle': -1.0}
@@ -652,6 +775,7 @@ def main():
 
     t_start = time.time()
     next_frame = t_start
+    frames = 0
     try:
         for i, mg in enumerate(mission):
             t_stage0 = time.time()
@@ -759,8 +883,26 @@ def main():
                 now = time.time()
                 if ff and now >= next_frame:
                     canvas.paste(cams.get('third', (1280, 720)), (0, 0))
-                    draw_pip(cams.get('fpv', (PIP_W, PIP_H)), PIP_FPV, '第一视角 FPV')
-                    draw_pip(cams.get('top', (PIP_W, PIP_H)), PIP_TOP, '俯视 TOP')
+                    draw_pip(cams.get('fpv', (PIP_W, PIP_H)), PIP_FPV, '① 第一视角')
+                    draw_pip(cams.get('top', (PIP_W, PIP_H)), PIP_TOP, '② 俯视')
+
+                    # ③ 深度相机：伪彩色图 + 中央最近距离
+                    if show_depth:
+                        depth_txt = ('最近 %.2f m' % cams.depth_min) \
+                            if cams.depth_min > 0 else '无数据'
+                        draw_pip(cams.get('depth', (PIP_W, PIP_H)), PIP_DEPTH,
+                                 '③ 深度相机', depth_txt)
+
+                    # ④ 光流：下视原图 + 箭头 + 角速度
+                    if show_flow:
+                        flow_len = math.hypot(st.flow_x, st.flow_y)
+                        if st.flow_quality > 0:
+                            flow_txt = '光流 %.0f °/s  质量 %d' % (flow_len, st.flow_quality)
+                        else:
+                            flow_txt = '贴地/无纹理（质量 0）'
+                        d_flow = draw_pip(crop_center(cams.get('down', (PIP_W, PIP_H))), PIP_FLOW,
+                                          '④ 光流（下视）', flow_txt)
+                        draw_flow_arrow(d_flow, PIP_FLOW, st.flow_x, st.flow_y)
                     canvas.paste(ov.render(pos, ctrl, (roll, pitch, yaw, thr),
                                            ws.telemetry, path, mg['name'], i, total,
                                            time.time() - t_start, t_stage,
@@ -770,8 +912,16 @@ def main():
                     except BrokenPipeError:
                         ff = None
                     next_frame = max(next_frame + 1.0 / FPS, time.time())
+                    frames += 1
+                    if args.frames and frames >= args.frames:
+                        print('已渲染 %d 帧，退出' % frames, flush=True)
+                        raise _FramesDone
                 time.sleep(0.004)
 
+    except _FramesDone:
+        print('达到 --frames 上限，收尾', flush=True)
+
+    try:
         # 收尾：确保落地并上锁
         apply(0, 0, 0, -1.0)
         time.sleep(2.0)

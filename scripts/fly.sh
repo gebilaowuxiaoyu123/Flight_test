@@ -7,6 +7,7 @@
 #   ./scripts/fly.sh remote           ③ 网页遥控：rc_server 日志 + 自动开浏览器
 #   ./scripts/fly.sh views            ④ 三视角：第一人称 / 第三人称 / 俯视 三个窗口
 #   ./scripts/fly.sh perc             ⑤ 感知：min_depth + optical_flow_logger
+#   ./scripts/fly.sh record [sensors] ⑥ 录 180 s 成片；sensors=depth,flow|none|depth|flow
 #
 # ---- 一把梭（全部都丢后台 tmux，适合无人值守）----
 #   ./scripts/fly.sh start            起仿真 + 后端 + 摇杆守护
@@ -348,6 +349,17 @@ perc)
     sleep 3
   fi
   exec ros2 launch flight_perception_cpp perception_cpp.launch.py "${@:2}"
+  ;;
+
+record)
+  # 录 180 s 三视角成片；可选带不带深度 / 光流画中画
+  #   flight record              深度 + 光流都带上（默认）
+  #   flight record none         只录三视角（最省 CPU）
+  #   flight record depth        只加深度相机
+  #   flight record flow         只加光流
+  sensors="${2:-depth,flow}"
+  log "⑥ 录制演示视频（传感器画中画：${sensors}）"
+  exec "${PROJECT_ROOT}/scripts/run_show.sh" --record --sensors "${sensors}"
   ;;
 
 views)

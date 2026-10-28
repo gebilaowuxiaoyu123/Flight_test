@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # 一条命令拉起"演示录制"需要的全部服务，然后（可选）直接开始录制。
 #
-#   ./scripts/run_show.sh                  # 只起服务，不录（自己手动跑 demo_show.py）
-#   ./scripts/run_show.sh --record         # 起服务 + 录一条 180 s 成片
-#   ./scripts/run_show.sh --stop           # 停掉全部
+#   ./scripts/run_show.sh                        # 只起服务，不录（自己手动跑 demo_show.py）
+#   ./scripts/run_show.sh --record               # 起服务 + 录一条 180 s 成片（含深度/光流画中画）
+#   ./scripts/run_show.sh --record --sensors none    # 只录三视角，不要深度/光流
+#   ./scripts/run_show.sh --record --sensors depth   # 只加深度相机
+#   ./scripts/run_show.sh --stop                 # 停掉全部
 #
 # 和 run_demo.sh 的区别：run_demo.sh 起的是"Python 版 Web 遥控器 + 感知节点"，
 # 本脚本起的是"C++ 后端 + 录制用的三路相机 + 跟拍相机"，专为出片服务。
@@ -18,6 +20,20 @@ ROS_ENV="source /opt/ros/${ROS_DISTRO}/setup.bash && source ${WORKSPACE_ROOT}/in
 WORLD=flow
 MODEL=x500_flow_depth_0
 XDISPLAY=:1
+# 传感器画中画：depth,flow / none / depth / flow
+#   none → 只录三视角（跟拍 + 第一视角 + 俯视），最省 CPU
+SENSORS="depth,flow"
+
+_args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --sensors) SENSORS="${2:-depth,flow}"; shift 2 ;;
+    --sensors=*) SENSORS="${1#*=}"; shift ;;
+    *) _args+=("$1"); shift ;;
+  esac
+done
+set -- ${_args[@]+"${_args[@]}"}
+log "传感器画中画：${SENSORS}（none=只录三视角）"
 OUT="${WORKSPACE_ROOT}/artifacts/flight_show_final.mp4"
 
 # ---------------------------------------------------------------- 停止
@@ -71,12 +87,20 @@ log "C++ 后端 :8000 已启动"
 
 # ---------------------------------------------------------------- 3. 三路相机桥
 tmux has-session -t cams 2>/dev/null && tmux kill-session -t cams
-tmux new-session -d -s cams "${ROS_ENV} && ros2 run ros_gz_bridge parameter_bridge \
-  /world/${WORLD}/model/${MODEL}/link/camera_link/sensor/IMX214/image@sensor_msgs/msg/Image@gz.msgs.Image \
-  /world/${WORLD}/model/cam_third/link/link/sensor/third_cam/image@sensor_msgs/msg/Image@gz.msgs.Image \
-  /world/${WORLD}/model/cam_top/link/link/sensor/top_cam/image@sensor_msgs/msg/Image@gz.msgs.Image \
-  > /tmp/cams.log 2>&1"
-log "三路相机桥已启动"
+# 相机桥：跟拍 / 第一视角 / 俯视 必建；下视(光流) 和 深度 按 --sensors 决定
+CAM_TOPICS=(
+  "/world/${WORLD}/model/${MODEL}/link/camera_link/sensor/IMX214/image@sensor_msgs/msg/Image@gz.msgs.Image"
+  "/world/${WORLD}/model/cam_third/link/link/sensor/third_cam/image@sensor_msgs/msg/Image@gz.msgs.Image"
+  "/world/${WORLD}/model/cam_top/link/link/sensor/top_cam/image@sensor_msgs/msg/Image@gz.msgs.Image"
+)
+case "${SENSORS}" in
+  *flow*) CAM_TOPICS+=("/world/${WORLD}/model/${MODEL}/link/camera_link/sensor/down_cam/image@sensor_msgs/msg/Image@gz.msgs.Image") ;;
+esac
+case "${SENSORS}" in
+  *depth*) CAM_TOPICS+=("/depth_camera@sensor_msgs/msg/Image@gz.msgs.Image") ;;
+esac
+tmux new-session -d -s cams "${ROS_ENV} && ros2 run ros_gz_bridge parameter_bridge ${CAM_TOPICS[*]} > /tmp/cams.log 2>&1"
+log "相机桥已启动（${#CAM_TOPICS[@]} 路）"
 
 # ---------------------------------------------------------------- 4. 真实位姿 + 相机动捕
 # gz 的 Python 绑定与 ROS 2 的 protobuf 版本冲突，必须走纯 Python 实现
@@ -134,7 +158,7 @@ if [[ "${1:-}" == "--record" ]]; then
   log "开始录制 → ${OUT}（约 180 s，期间请勿锁屏/切换 Xephyr 窗口大小）"
   mkdir -p "${WORKSPACE_ROOT}/artifacts"
   DISPLAY=${XDISPLAY} python3 -u "${PROJECT_ROOT}/scripts/demo_show.py" \
-    --record "${OUT}" --grab ":1.0+0,0"
+    --record "${OUT}" --grab ":1.0+0,0" --sensors "${SENSORS}"
   log "录制完成: ${OUT}"
 else
   log "就绪：浏览器看 http://127.0.0.1:8000/ ；录片用 ./scripts/run_show.sh --record"

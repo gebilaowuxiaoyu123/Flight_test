@@ -9,7 +9,7 @@
 #
 # 由 scripts/flight_env.sh 自动 source，不需要手动加载。
 
-_flight_subcommands="link sim remote views perc clean start stop status watch gui logs mode arm takeoff up down fwd back left right spin land"
+_flight_subcommands="link sim remote views perc record clean start stop status watch gui logs mode arm takeoff up down fwd back left right spin land"
 
 _flight_console_hint() {
   # 空补全 + 提示：只列一次，不要重复刷屏
@@ -43,6 +43,10 @@ _flight_complete() {
         ;;
       clean)
         COMPREPLY=($(compgen -W "--all --dry-run --days" -- "${cur}"))
+        return 0
+        ;;
+      record)
+        COMPREPLY=($(compgen -W "depth,flow none depth flow" -- "${cur}"))
         return 0
         ;;
       up|down|fwd|back|left|right|spin|takeoff)

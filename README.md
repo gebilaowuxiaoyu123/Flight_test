@@ -61,7 +61,10 @@ flight land      # 降落上锁
 **想录演示视频：**
 
 ```bash
-./scripts/run_show.sh --record   # 起全部服务并录 180 s 三视角成片
+flight record                    # 录 180 s 成片：三视角 + 深度相机 + 光流
+flight record none               # 只录三视角（最省 CPU）
+flight record depth              # 三视角 + 深度相机
+flight record flow               # 三视角 + 光流
 ```
 
 代码按什么顺序读、每条命令在干什么，见 [docs/12-how-to-read-and-run.md](docs/12-how-to-read-and-run.md)。
