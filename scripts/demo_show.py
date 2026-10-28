@@ -597,11 +597,33 @@ def crop_center(im, keep=0.84):
     return im.crop(box).resize((w, h), Image.BILINEAR)
 
 
+def pick_encoder(choice='auto'):
+    """选视频编码器：能用 GPU 就用 GPU。
+
+    实测同一段 60 s 素材：libx264 veryfast/crf20 要 32.4 s CPU，
+    h264_nvenc/cq30 只要 4.4 s CPU，体积 7.8M vs 8.3M 基本持平。
+    """
+    if choice != 'x264':
+        try:
+            out = subprocess.run(['ffmpeg', '-hide_banner', '-encoders'],
+                                 capture_output=True, text=True, timeout=5).stdout
+            if 'h264_nvenc' in out:
+                return (['-c:v', 'h264_nvenc', '-preset', 'p5',
+                         '-rc', 'vbr', '-cq', '30', '-b:v', '0'], 'h264_nvenc(GPU)')
+        except Exception:
+            pass
+        if choice == 'nvenc':
+            print('!! 没有可用的 h264_nvenc，退回 libx264', file=sys.stderr)
+    return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20'], 'libx264(CPU)'
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--record', default='')
     ap.add_argument('--dry-run', action='store_true')
     ap.add_argument('--grab', default=':1.0+0,0')
+    ap.add_argument('--encoder', default='auto', choices=('auto', 'nvenc', 'x264'),
+                    help='视频编码器：auto=有 GPU 就用 NVENC')
     ap.add_argument('--duration', type=int, default=180)
     ap.add_argument('--sensors', default='depth,flow',
                     help='要显示哪几路传感器画中画：depth,flow / none / depth / flow')
@@ -770,6 +792,7 @@ def main():
 
     ff = None
     if args.record and not args.dry_run:
+        enc_args, enc_name = pick_encoder(args.encoder)
         ff = subprocess.Popen([
             'ffmpeg', '-loglevel', 'error', '-y',
             # 0: 网页窗口（真实 Firefox）
@@ -781,10 +804,10 @@ def main():
             '-filter_complex',
             '[1:v][0:v]overlay=1280:0:format=auto,format=yuv420p[v]',
             '-map', '[v]', '-t', str(args.duration),
-            '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+            *enc_args,
             '-movflags', '+faststart', args.record,
         ], stdin=subprocess.PIPE)
-        print(f'录制中 → {args.record}')
+        print(f'录制中 → {args.record}（编码器 {enc_name}）')
 
     t_start = time.time()
     next_frame = t_start

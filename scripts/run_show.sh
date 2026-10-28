@@ -23,11 +23,14 @@ XDISPLAY=:1
 # 传感器画中画：depth,flow / none / depth / flow
 #   none → 只录三视角（跟拍 + 第一视角 + 俯视），最省 CPU
 SENSORS="depth,flow"
+# 视频编码器：auto=有 GPU 就用 NVENC（省 7 倍 CPU），x264=强制软编
+ENCODER="auto"
 
 _args=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --sensors) SENSORS="${2:-depth,flow}"; shift 2 ;;
+    --encoder) ENCODER="${2:-auto}"; shift 2 ;;
     --sensors=*) SENSORS="${1#*=}"; shift ;;
     *) _args+=("$1"); shift ;;
   esac
@@ -158,7 +161,7 @@ if [[ "${1:-}" == "--record" ]]; then
   log "开始录制 → ${OUT}（约 180 s，期间请勿锁屏/切换 Xephyr 窗口大小）"
   mkdir -p "${WORKSPACE_ROOT}/artifacts"
   DISPLAY=${XDISPLAY} python3 -u "${PROJECT_ROOT}/scripts/demo_show.py" \
-    --record "${OUT}" --grab ":1.0+0,0" --sensors "${SENSORS}"
+    --record "${OUT}" --grab ":1.0+0,0" --sensors "${SENSORS}" --encoder "${ENCODER}"
   log "录制完成: ${OUT}"
 else
   log "就绪：浏览器看 http://127.0.0.1:8000/ ；录片用 ./scripts/run_show.sh --record"

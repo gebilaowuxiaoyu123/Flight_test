@@ -182,6 +182,9 @@ flight land      # 降落并上锁
 ./scripts/run_show.sh --record --sensors none     # 只录三视角
 ./scripts/run_show.sh --record --sensors depth    # 三视角 + 深度相机
 ./scripts/run_show.sh --record --sensors flow     # 三视角 + 光流（下视）
+
+# 编码器默认 auto：有 NVENC 就用 GPU 编（CPU 省一半），也可强制软编
+./scripts/run_show.sh --record --encoder x264
 ```
 
 成片布局：主画面 = 跟拍第三人称；底部四路画中画

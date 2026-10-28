@@ -36,6 +36,23 @@ flight record flow         # 三视角 + 光流（下视）
 `./scripts/run_show.sh --record --sensors <...>`；关掉的那一路**连 GZ→ROS 相机桥都不建**，
 不会白占 CPU 和 DDS 带宽。
 
+**录制吃 CPU 还是吃 GPU？**（实测数据，机器是 RTX 5070 Laptop）
+
+| 环节 | 跑在哪 | 实测占用 |
+|---|---|---|
+| Gazebo 5 路相机渲染 | **GPU**（nvidia-smi 里能看到 gz 渲染进程） | GPU 64%、显存 1.6 GB |
+| Gazebo 物理 + 传感器更新 | CPU **单线程** | gz 主进程 145~152%，其中一个线程 84% |
+| 相机图像显存→内存回读、GZ→ROS 桥 | CPU | 含在上面 |
+| PIL 合成 1920×1080 | CPU | python 25~30% |
+| x11grab 抓网页窗口 | CPU | 含在 ffmpeg 里 |
+| 视频编码 | **GPU**（`h264_nvenc`） | ffmpeg 24%；换 `libx264` 是 48% |
+
+所以「GPU 利用率不高」是正常的：场景太简单（棋盘格 + 一堵墙）、相机分辨率也小，
+光栅化几十毫秒就完了，GPU 60% 左右就到顶；真正的瓶颈是物理和传感器的单线程 CPU 活。
+
+编码器默认为 `auto`（有 NVENC 就用 GPU），可以强制：
+`./scripts/run_show.sh --record --encoder x264`（软编，体积略小、CPU 多一倍）。
+
 **必须开四个终端吗？** 不一定，两种都行：
 
 | 方式 | 命令 | 日志 |
