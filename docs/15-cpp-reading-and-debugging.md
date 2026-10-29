@@ -736,6 +736,52 @@ int main(int argc, char ** argv);
 2. `main.cpp:147-156` 四通道映射与兜底（`has_pilot` vs `c.valid` 的区别见 5.1）
 3. `main.cpp:158-171` 填 PX4 消息字段并 `publish`
 
+### `main.cpp:117` 里的 `c` 是什么（名字容易误会）
+
+```cpp
+const auto c = state.control();       // ← c = control，不是 client
+const bool armed = state.armed();
+```
+
+**`c` 不是"网页"，是"控制状态的一份快照"**。名字来自 `control`（控制），
+类型是 `SharedState::Control`，六个字段：
+
+```cpp
+struct Control {
+    bool valid;                              // 手在不在杆上（deadman + 300ms 内更新）
+    bool any_client;                         // 有没有网页连着
+    double roll, pitch, yaw, throttle;       // 当前持控制权那个客户端发来的杆量
+};
+```
+
+**只有 `any_client` 一个字段跟"网页"有关**，其余五个是"操控状态"。
+所以 `c` 更准确的名字是 `ctrl` / `snapshot`，而不是 `web`。
+
+**五个场景下 `c` 的实际内容**（用 `SharedState` 直接跑出来的）：
+
+| 场景 | `valid` | `any_client` | roll | pitch | yaw | thr |
+|---|---|---|---|---|---|---|
+| ① 什么都没连 | 0 | 0 | 0 | 0 | 0 | −1.0 |
+| ② 网页 #7 连上，没按使能 | 0 | 1 | 0 | 0 | 0 | −1.0 |
+| ③ #7 按着使能打杆 | 1 | 1 | 0.3 | −0.2 | 0.5 | 0.1 |
+| ④ 又连了网页 #8（旁观） | 1 | 1 | 0.3 | −0.2 | 0.5 | 0.1 |
+| ⑤ #7 断开（#8 还连着） | **0** | 1 | 0.3 | −0.2 | 0.5 | 0.1 |
+
+第 ④ 行说明**旁观者不会覆盖杆量**（`setSticks` 里那条 `if` 挡掉了）。
+
+第 ⑤ 行有个值得注意的细节：**操控者断开后 `valid` 变 0，但四个杆量值还是旧的** ——
+因为 `releaseClient` 只清 `client_` 和 `deadman_`，没清杆量。这**不是 bug**：
+
+- 下发路径：`main.cpp:147` 用 `c.valid ? c.roll : 0.0F` 把旧值**屏蔽掉了**
+- 遥测路径：`getTelemetryFor` 确实把旧杆量发给网页了，但前端只在
+  `controller === 'other'` 时才用它回显摇杆（[app.js:167](/home/wiki_flight_project/src/flight_ui/web/app.js:167)），
+  断开后 `controller` 是 `none`，所以也不会显示
+
+即 **"靠 valid 屏蔽"而不是"断开时清零"** —— 少做一次写操作，效果一样。
+
+> 这也是一般做法：不要靠"把状态清干净"来保证安全，
+> 而是在**消费端用一个有效性标志把关**。清理总会漏，把关只写一处。
+
 **但 `main()` 里还有一处必须读懂：四个订阅（`main.cpp:59-85`）**
 
 它们只做一件事 —— **把 PX4 的遥测搬进 `SharedState`**，每个回调只有一两行：
