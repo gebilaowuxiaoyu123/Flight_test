@@ -248,7 +248,77 @@ void handleConnection(int fd, SharedState & state, const std::string & web_root,
                       rclcpp::Node * node, const CommandPublisher & cmd_pub);
 ```
 
-每个 TCP 连接一个 `std::thread`。流程：读 HTTP 头 → 是 `Upgrade: websocket` 就交给 `serveWebSocket`，否则当静态文件回。
+调用方在 `main.cpp:193-200`：
+
+```cpp
+const int fd = ::accept(listen_fd, nullptr, nullptr);   // 主循环收一个连接
+std::thread(handleConnection, fd, ...).detach();        // 甩给新线程，主循环继续收
+```
+
+**即"每连接一个线程"。** 函数体分 6 块，按顺序读：
+
+| # | 代码 | 在干什么 |
+|---|---|---|
+| ① | `static std::atomic<uint64_t> next_client{1};`<br>`const uint64_t client_id = next_client++;` | 给连接发号。`static` 让计数器跨调用保留；`atomic` 因为多线程同时执行这两行。这个 id 后面被 `SharedState::attached_` 用来区分是哪个浏览器 |
+| ② | `net::io_context ioc(1);`<br>`socket.assign(tcp::v4(), fd, ec);`<br>`if (ec) { ::close(fd); return; }` | 把裸 `fd` 交给 Beast 的 socket 管。**失败分支必须自己 `close(fd)`** —— 那时 socket 还没接管成功，不关就漏 fd。成功后所有权归 socket，不能再手动关 |
+| ③ | `beast::tcp_stream stream(std::move(socket));`<br>`http::read(stream, buffer, req);` | **阻塞**读完一个完整 HTTP 请求（读到 `Content-Length` 收齐）。因为每连接一个线程，阻塞只影响自己 |
+| ④ | `if (websocket::is_upgrade(req))`<br>`serveWebSocket(std::move(stream), std::move(req), ...); return;` | 判断请求头有没有 `Upgrade: websocket`。`std::move` 是**必须**的：`tcp_stream` 只能移动不能复制。那个 `return` 也**必须**——WS 跑完返回后绝不能再往下写 HTTP 响应，否则协议错乱 |
+| ⑤ | `/health` 拼 JSON<br>否则静态文件 | 路径处理见下面的表 |
+| ⑥ | `res.prepare_payload(); http::write(stream, res);` | `prepare_payload()` 负责写 `Content-Length`，**必须等 body 最终确定之后调** |
+
+第 ⑤ 块路径处理的三个细节：
+
+| 代码 | 目的 |
+|---|---|
+| `if (relative.find("..") != npos) → 400` | 挡路径穿越，如 `GET /static/../../etc/passwd` |
+| `target == "/"` → `"/index.html"`；`/static/xxx` → `"/xxx"` | 只有这两种映射，其它路径按字面找文件 |
+| `keep_alive(false)` | 一次请求一条连接，回完就关，不用管连接复用 |
+
+**整个函数被 `try { } catch (const std::exception &)` 包住，这是必需的**：
+线程是 `.detach()` 出去的，异常一旦逃出线程函数就会 `std::terminate` **让整个进程崩掉**。
+Beast 的同步 API 在客户端断开时会抛异常，所以这个 catch 是"网页那边出问题不能把飞控后端带走"的最后一道防线。
+
+**背景知识：这里说的「连接」是什么**（读这段代码绕不开）
+
+TCP 连接 = 两台机器之间一条**双向通道**，协议保证**不丢、不乱序、不重复**。
+一条连接由 4 个数字唯一确定：`(源IP, 源端口, 目标IP, 目标端口)`。
+
+```bash
+ss -tan
+# LISTEN      127.0.0.1:8000      0.0.0.0:*      ← 还没人连，只是"守着电话"
+# ESTABLISHED 127.0.0.1:8000      127.0.0.1:54321 ← 这条才是连接
+```
+
+`::accept()` 返回的 `fd` 就是这条新连接在本进程里的句柄（一个整数，本质是数组下标）。
+
+**最关键的一点：TCP 是「字节流」，不是「消息流」。**
+发两次 `"abc"` `"def"`，对方可能一次收到 `"abcdef"`，也可能拆成三段。
+**边界是 TCP 不管的，必须靠上层协议自己标记**：
+
+| 协议 | 怎么标记边界 |
+|---|---|
+| HTTP | `Content-Length: 123`（所以 `http::read` 要读到字节数收齐才返回） |
+| WebSocket | 每帧带长度头（所以 `ws.text(true)` 不能省，否则发的是带帧头的二进制，前端 `JSON.parse` 会拿到 Blob） |
+
+**HTTP 和 WebSocket 跑在同一根管子上**：WebSocket 不是新开连接，而是发一个
+`Upgrade: websocket` 的 HTTP 请求，服务端回 `101 Switching Protocols`，
+之后这根管子就从"一问一答"改成"长期双向"。
+这就是上面 `serveWebSocket(...)` 之后**必须 `return`** 的根本原因 ——
+管子已经换用法了，再写 HTTP 响应就是往里面塞错格式的数据。
+
+**三个已知取舍**（都能接受，但要知道）：
+
+1. **每连接一线程、无上限**：连接多了线程就多。局域网点控够用，被刷连接会耗尽线程。
+2. **`http::read` 没有超时**（实测确认）：客户端连上但一个字节不发，
+   等了 12 秒连接仍被占着，那条线程会一直阻塞在这里。
+   `ws_session.cpp:34` 那边就设了 `timeout::suggested(...)`（注释写着"客户端拔网线时 read 会永远阻塞，线程就泄漏了"），
+   HTTP 这段没加同款保护。要补的话是在 `http::read` 前加：
+   ```cpp
+   stream.expires_after(std::chrono::seconds(10));
+   ```
+   超时会抛 `beast::system_error`，被现有的 catch 接住，线程正常退出。
+3. **静态文件全量读进内存**（`readFile` → `std::string`）：前端几百 KB 无所谓，
+   将来传大文件要改流式。
 
 #### `src/flight_ui_cpp/src/ws_session.cpp`（212 行，最大，最后读）
 
