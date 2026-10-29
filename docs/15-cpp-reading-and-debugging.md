@@ -316,6 +316,69 @@ void killNow(rclcpp::Node * node, const CommandPublisher & cmd_pub);
    强制上锁（p2 = 21196）本包**没有**用，只在 `scripts/fly.sh` 落地兜底时用到。
 2. `sleepMs` 意味着**这些函数是阻塞的**，它们跑在 WebSocket 连接线程里
 
+**逐个函数看**
+
+| 函数 | 行 | 干什么 | 会不会阻塞 |
+|---|---|---|---|
+| `sendCommand` | 17 | **所有命令的唯一出口**。填 7 个参数位 + 路由字段（`target_system=1`、`from_external=true` 等），然后 `publish` | 否 |
+| `nowUs` | 38 | 当前时间（纳秒 / 1000） | 否 |
+| `isManualNavState` | 45 | 判断 `nav_state` 是不是手动类：**0(MANUAL) / 1(ALTCTL) / 2(POSCTL) / 10(ACRO) / 15(STABILIZED)** | 否 |
+| `sleepMs` | 51 | 阻塞睡 | **是** |
+| `ensureManualMode` | 58 | 不是手动模式就先切 POSCTL（`176, 1.0F, 3.0F`），再睡 800 ms 等它生效 | **是（800 ms）** |
+| `armWithRetry` | 69 | 解锁重试：每轮发一条 ARM，然后 1 s 内每 100 ms 查一次 `armed`；1 s 没成功就重新 `ensureManualMode` 再来一轮，直到 `arm_retry_sec`（默认 10 s）用尽 | **是（最长 10 s）** |
+| `armSequence` | 90 | `ensureManualMode` → `armWithRetry`；**失败就补发一条 `400, 0.0F` 确保留在上锁状态** | **是** |
+| `takeoffSequence` | 103 | `ensureManualMode` → 没解锁就先解锁（失败则直接 return，不硬起飞）→ 睡 300 ms → 切 POSCTL → 睡 800 ms → 发 `NAV_TAKEOFF`（p7 = AMSL 高度） | **是（≥1.1 s + 解锁时间）** |
+| `landNow` | 120 | 一条 `21` | 否 |
+| `killNow` | 127 | 先 `400, 0.0F` 上锁，再 `185, 1.0F` 飞行终止 | 否 |
+
+**`isManualNavState` 里那个注释值得单独记**（第 44 行）：
+
+```cpp
+// 注意 5 是 AUTO_RTL，不是 ACRO —— ACRO 是 10。
+```
+
+这是 `nav_state` 编号最反直觉的一处。写错的话 `ensureManualMode` 会认为
+"AUTO_RTL 也算手动模式"，于是不切模式，解锁就被拒。
+
+**`armWithRetry` 为什么是这个双层循环**
+
+```cpp
+while (now < deadline) {                       // 外层：最多 arm_retry_sec 秒（默认 10）
+    sendCommand(cmd_pub, nowUs(node), 400, 1.0F);      // 发一条 ARM
+    const auto tick = now + 1s;
+    while (now < tick) {                       // 内层：1 秒内每 100 ms 看一次 armed
+        if (state.armed()) return true;
+        sleepMs(100);
+    }
+    ensureManualMode(state, node, cmd_pub);    // 被拒可能是模式被踢走了，重切一次
+}
+return false;
+```
+
+- **为什么不能发一条就认为成功**：PX4 冷启动要跑 arming checks（EKF 收敛、气压计预热），
+  第一次 ARM 十有八九被拒。实测要十几秒才收敛。
+- **为什么内层要轮询**：`armed` 是 PX4 遥测回调异步写进来的，只能等，不能"发完就当成了"。
+- **为什么每轮都 `ensureManualMode`**：解锁被拒的原因之一是"当前在 AUTO_* 模式"，
+  每轮重切一次 POSCTL 把这个因素排除掉。
+
+**`takeoffSequence` 里那两个 sleep 是干嘛的**
+
+```cpp
+sleepMs(300);                                  // 等解锁状态稳定
+sendCommand(cmd_pub, nowUs(node), 176, 1.0F, 3.0F);   // 切 POSCTL
+sleepMs(800);                                  // 等模式切换生效
+sendCommand(cmd_pub, nowUs(node), 22, ...);           // 再发 NAV_TAKEOFF
+```
+
+PX4 处理模式切换是异步的：发完 `DO_SET_MODE` 立刻发 `NAV_TAKEOFF`，很可能
+TAKEOFF 到达时模式还没切过去，被丢弃。所以中间必须留时间。
+
+**一个行为差异要知道**：这里的 `ensureManualMode` / `takeoffSequence` 都会切 **POSCTL**，
+而 `scripts/fly.sh` 走的是 **ALTCTL**。原因是无 GPS 时 POSCTL 的横滚/俯仰会被抑制
+（`xy_valid` 不成立），只能垂直方向动。所以网页起飞是正常的（起飞只要垂直），
+但**起飞后想在 POSCTL 里前后左右飞，需要先点 ALTCTL 按钮**
+（这就是 `4023dc3` 加那个按钮的原因）。
+
 ### 3.4 第四层：IO 外壳
 
 #### `src/flight_ui_cpp/src/http_server.cpp`（104 行）
