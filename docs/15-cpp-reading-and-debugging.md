@@ -579,6 +579,90 @@ int main(int argc, char ** argv);
 2. `main.cpp:147-156` 四通道映射与兜底（`has_pilot` vs `c.valid` 的区别见 5.1）
 3. `main.cpp:158-171` 填 PX4 消息字段并 `publish`
 
+### 3.5b 三个小文件（先啃掉，建立信心）
+
+#### `src/flight_ui_cpp/src/mode_tables.cpp`（43 行）
+
+**两张表，方向相反，编号也不是同一套**：
+
+```cpp
+std::string modeNameOf(int nav_state);      // 读方向：PX4 状态 → 名字（18 个 case）
+int         mainModeOf(const std::string&); // 写方向：名字 → 主模式号（7 个）
+```
+
+- `modeNameOf`：18 个显式 `case`（0~6、10、12~15、17~22），其余落到
+  `default: "STATE_" + std::to_string(nav_state)` —— 所以**永远不会返回空串**，
+  未映射的（7/8/9/11/16）会显示 `STATE_7` 这种。
+- `mainModeOf`：只认 7 个主模式名，`MANUAL=1 ALTCTL=2 POSCTL=3 AUTO=4 ACRO=5
+  OFFBOARD=6 STABILIZED=7`，**认不出就返回 0**（`ws_session` 据此回 `unknown mode`）。
+
+⚠️ **同一个模式，读和写的数字不一样**（实测）：
+
+| | 读方向 | 写方向 |
+|---|---|---|
+| ALTCTL | `nav_state = 1` | `mainModeOf → 2` |
+| POSCTL | `nav_state = 2` | `mainModeOf → 3` |
+
+所以"把读到的状态再写回去"必须经过 `modeNameOf` → `mainModeOf` 翻译，
+**不能把 `nav_state` 直接塞进参数位**。
+
+另外 `mainModeOf` 只切**主模式**，进不了 `AUTO_TAKEOFF`/`AUTO_LAND` 这种子模式 ——
+那些是由 `NAV_TAKEOFF`(22) / `NAV_LAND`(21) 命令触发的，不走这条路。
+
+#### `src/flight_ui_cpp/src/http_util.cpp`（41 行）
+
+三个纯函数，不碰 ROS，是最好单测的一个（见 4.5）。
+
+```cpp
+std::string jsonString(const Json::Value & v);                    // Json → 紧凑字符串
+bool readFile(const std::string & path, std::string & content);   // content 是出参
+std::string contentTypeOf(const std::string & path);              // 后缀 → MIME
+```
+
+- `jsonString` 里 `builder["indentation"] = ""`：**压缩成一行**。WebSocket 每 100 ms
+  推一次遥测，缩进是纯浪费带宽。
+- `readFile` 用 `ss << file.rdbuf()` 一把读完，比逐行读快；打不开就返回 false，
+  内容留在出参里（不修改）。调用方是 `http_server` 的静态文件分支。
+- `contentTypeOf` **手写后缀比较**，注释点明了原因：`std::string::ends_with` 是 C++20，
+  本项目 C++17。返回的 MIME 都带 `; charset=utf-8` —— **不加中文会乱码**。
+  认不出的后缀兜底 `text/plain`。
+
+#### `src/flight_ui_cpp/src/config.cpp`（37 行）
+
+```cpp
+const FlightUiConfig & config();          // 全局单例，返回 const 引用
+void loadConfig(rclcpp::Node & node);     // main 里调一次
+```
+
+**为什么用全局**（文件头注释就写了）：HTTP 线程、WebSocket 会话、定时器、命令时序
+都要读这几个参数。逐层传参会让"6 个文件互相认识"，不如集中放一处。
+
+**`declare_parameter` 的默认值取自结构体**：
+
+```cpp
+g_config.port = node.declare_parameter<int>("port", g_config.port);
+```
+
+所以优先级是：**YAML 里的值 > `FlightUiConfig` 里的默认值**。
+
+`main.cpp:44` 在创建任何定时器之前先调 `loadConfig(*node)`，
+`main.cpp:45` 再 `const auto & cfg = config();` —— 顺序不能反。
+
+**重点是四个 `std::clamp`**：
+
+```cpp
+g_config.control_rate_hz   = std::clamp(..., 1.0, 500.0);
+g_config.telemetry_rate_hz = std::clamp(..., 0.1, 50.0);
+g_config.arm_retry_sec     = std::clamp(..., 1.0, 60.0);
+g_config.takeoff_altitude_m= std::clamp(..., 0.3, 20.0);
+```
+
+注释解释了最要命的那条：**`control_rate_hz` 写成 0，定时器周期会变成 0（或负）→ 直接崩**。
+`std::clamp` 把配置错误挡在启动阶段，而不是让程序在 50 Hz 定时器里除以零。
+
+> `port` 没有 clamp。写成 0 会让系统随机分配端口，写成 80 会被权限拒绝 ——
+> 属于"填错了自己看得出来"的类型，可以接受。
+
 ### 3.6 感知包（风格完全不同：没有网络、没有服务，只有「订阅 → 算 → 发布」）
 
 #### `src/flight_perception_cpp/src/min_depth.cpp`（92 行）
