@@ -627,7 +627,61 @@ for (;;) {
 | `land` | 183 | `sendCommand(..., 21)` |
 | `kill` | 191 | 上锁 + `FLIGHT_TERMINATION`，同时把杆量置成"松开" |
 
-回给前端的 `ack` 不是客户端发来的消息，是服务端下发的结果回执（前端靠 `type=="ack"` 在右下角打印）。
+**`ack` 是什么、怎么用**
+
+`ack` = acknowledgment（**回执**）。它不是前端发来的消息，而是**服务端对每条命令的应答**：
+"我收到了、我做了 / 我拒绝了，原因是……"。
+
+三个关键点：
+
+1. **一次命令 → 一条 ack，但不是"成功证明"**
+   `ok:true` 只表示**请求被受理**（命令已经发到 `/fmu/in/vehicle_command`），
+   **不代表飞机照做了**。真正确认要看遥测里的 `armed` / `mode` 变化。
+   所以 `message` 写的是 "arm requested" 而不是 "armed"。
+
+2. **前端只用它打一行日志**（[app.js:197](/home/wiki_flight_project/src/flight_ui/web/app.js:197)）
+
+   ```js
+   if (data.type === 'ack')
+       log(`${data.action}: ${data.ok ? 'OK' : 'REJECTED'} ${data.message || ''}`);
+   ```
+
+   `log()` 是 `logEl.textContent = 时间 + 消息`，所以页面右下角 `#log` 会显示
+   类似 `21:52:08  arm: REJECTED 没有遥测：ROS 链路没通` 这样一行。
+
+3. **ack 的四个固定字段**
+
+   | 字段 | 含义 |
+   |---|---|
+   | `type` | 固定 `"ack"`，前端据此分流（`telemetry` 走另一个分支） |
+   | `action` | 回显触发它的命令类型（`arm` / `mode` / `land` / …） |
+   | `ok` | `true` = 受理，`false` = 拒绝 |
+   | `message` | 给用户看的原因，直接显示在页面上 |
+
+**后端一共有 5 个地方回 ack，`ok:false` 的情形有三种**：
+
+| 位置 | 触发条件 | message |
+|---|---|---|
+| `ws_session.cpp:96` | 命令类消息但 `statusAgeSec() > 1.5`（ROS 链路没通） | 没有遥测：ROS 链路没通，先跑 flight link |
+| `:134` | `mode` 的名字认不出（`mainModeOf` 返回 0） | unknown mode: XXX |
+| `:164` | `arm`/`takeoff` 时按着使能且油门 > -0.8 | throttle must be at minimum |
+
+> ⚠️ 注意 `:96` 那条**优先级最高**：没遥测时连 `mode BOGUS` 都会被它挡住，
+> 你看到的是"没有遥测"而不是"unknown mode"。
+
+**实测（起 rc_server 但不起仿真，用最小 WS 客户端发命令）**：
+
+```
+发 {"type":"arm"}                → {"type":"ack","action":"arm","ok":false,
+                                   "message":"没有遥测：ROS 链路没通，先跑 flight link（起 MicroXRCEAgent）"}
+发 {"type":"mode","mode":"POSCTL"} → 同上
+发 {"type":"mode","mode":"BOGUS"}  → 同上（被链路检查挡住，而不是报 unknown mode）
+发 {"type":"land"}                → 同上
+```
+
+**调试时怎么用它**：不用开浏览器。WebSocket 里发一条命令，看回来的 `ack.message`
+就知道后端是"没收到"、"链路不通"还是"被你自己的油门位置拒了"——
+这比盯着网页右下角那一行字高效得多。
 
 **分发里的三个坑**（都是踩出来的）
 
