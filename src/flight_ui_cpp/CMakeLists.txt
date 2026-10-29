@@ -1,8 +1,14 @@
 cmake_minimum_required(VERSION 3.8)
 project(flight_ui_cpp)
 
+# 没有指定构建类型时默认 Debug：只有 -g 才能用 gdb 下断点、看变量。
+# 本包是控制后端，-O0 的开销相对 DDS 可以忽略；要压测再显式传 -DCMAKE_BUILD_TYPE=Release。
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Debug CACHE STRING "构建类型" FORCE)
+endif()
+
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
+  add_compile_options(-Wall -Wextra -Wpedantic -g)
 endif()
 
 # find dependencies
