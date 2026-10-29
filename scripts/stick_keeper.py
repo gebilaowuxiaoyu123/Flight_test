@@ -78,7 +78,9 @@ def _read_lease():
 
 
 def _write_lease():
-    tmp = LEASE_FILE + '.tmp'
+    # 临时文件名带本进程 PID：C++ 侧（control_lease.cpp）用同一份租约，
+    # 共用一个固定 .tmp 时两边同时写会交织成半行，被 rename 后读端解析失败。
+    tmp = f'{LEASE_FILE}.tmp.{os.getpid()}'
     try:
         with open(tmp, 'w') as f:
             f.write(f'{LEASE_NAME} {LEASE_PRIO} {os.getpid()} {int(time.time() * 1000)}\n')

@@ -35,7 +35,10 @@ bool pidAlive(int pid)
 
 void writeEntry(const std::string & owner, int prio, int pid)
 {
-    const std::string tmp = std::string(kPath) + ".tmp";
+    // 临时文件名带本进程 PID：网页后端(本文件)和终端摇杆守护(stick_keeper.py)
+    // 用同一份租约，若共用一个固定的 .tmp，两边同时写会把内容交织进同一个文件，
+    // 再被其中一方 rename 成正式租约 —— 读端解析失败会当成"没有租约"而双双发杆。
+    const std::string tmp = std::string(kPath) + ".tmp." + std::to_string(::getpid());
     {
         std::ofstream out(tmp, std::ios::out | std::ios::trunc);
         if (!out.is_open()) {
@@ -43,7 +46,8 @@ void writeEntry(const std::string & owner, int prio, int pid)
         }
         out << owner << ' ' << prio << ' ' << pid << ' ' << nowMs() << '\n';
     }
-    // 原子替换：读端要么看到旧内容，要么看到新内容
+    // 原子替换：读端要么看到旧内容，要么看到新内容。
+    // 前提是 tmp 和目标在同一文件系统（这里同目录，天然满足）。
     std::rename(tmp.c_str(), kPath);
 }
 
