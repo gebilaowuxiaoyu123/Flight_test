@@ -97,6 +97,86 @@ readelf -S build/flight_ui_cpp/rc_server | grep -c debug_info   # 应 ≥ 1
 依赖是**单向**的：`main → 各模块 → shared_state`，没有循环。
 `http_util` / `mode_tables` / `config` 是叶子节点（无内部依赖），最好改。
 
+### 2.1 两个外部工具：Beast 和 tmux
+
+读这个仓库到处会撞到这两个名字，它们是完全不同层次的东西 ——
+**Beast 是程序里的库，tmux 是运维工具**。
+
+#### Boost.Beast：HTTP / WebSocket 的协议实现
+
+层次关系：
+
+```
+你的代码（http_server.cpp / ws_session.cpp）
+     ↓
+Boost.Beast        ← 懂 HTTP 报文 和 WebSocket 帧
+     ↓
+Boost.Asio         ← 懂 TCP socket（收发字节）
+     ↓
+操作系统
+```
+
+**一句话：Asio 只给"能收发字节的管子"，Beast 把字节变成"消息"。**
+报文头怎么分、`Content-Length` 怎么数、WS 帧的 mask 怎么算 —— 全替你做了。
+
+项目里的用法（`http_server.cpp` / `ws_session.cpp`）：
+
+```cpp
+http::read(stream, buffer, req);      // 读一个完整 HTTP 请求（自己数 Content-Length）
+res.prepare_payload();                // 自己算 Content-Length
+http::write(stream, res);
+
+websocket::stream<beast::tcp_stream> ws(std::move(stream));
+ws.accept(req);                       // 握手：校验 Sec-WebSocket-Key，回 101
+ws.read(buffer, ec);                  // 读一个完整 WS 帧
+```
+
+**为什么值得用**：Beast 自身是 header-only（不用编一份库出来）、和 Asio 天然一套、
+而且 **HTTP 和 WebSocket 用同一个 `tcp_stream`**，所以"同端口先 HTTP 后升级 WS"
+写起来很自然（这就是 `websocket::is_upgrade(req)` 那个分支的底气）。
+
+> 注意 `CMakeLists.txt:21` 仍然是 `find_package(Boost REQUIRED COMPONENTS system thread)`
+> —— 链接的是 **Asio 依赖的 Boost.System / Boost.Thread**，不是 Beast 本身。
+
+**要记住的特点**：Beast 有同步和异步两套 API。本项目用**同步**（`http::read` 会阻塞），
+所以才有"每连接一个线程"的模型（`main.cpp:193`）。异步 API 能一个线程扛几千连接，
+但代码复杂得多 —— 局域网点控没必要。
+
+#### tmux：让长跑服务脱离终端存活
+
+**终端复用器**。最关键的一句：**tmux 里的进程不依赖你的终端窗口，
+关掉终端、Ctrl-C、SSH 断线，里面的进程照样活着。**
+
+项目里这些服务必须一直跑，所以全进了 tmux：
+
+```bash
+tmux new-session -d -s agent "MicroXRCEAgent udp4 -p 8888 > /tmp/flight_agent.log 2>&1"
+tmux new-session -d -s sitl  "HEADLESS=1 ./scripts/run_sitl_combined.sh > /tmp/flight_sitl.log 2>&1"
+tmux new-session -d -s stick "python3 scripts/stick_keeper.py > /tmp/stick_keeper.log 2>&1"
+```
+
+`-d` = detached（后台起，不切过去），`-s` = 会话名。
+本项目脚本里实际出现的会话名（`grep` 自 `scripts/*.sh`）：
+`agent` `sitl` `web` `stick` `cams` `gzgui` `show` `depthbridge`。
+
+四个日常命令：
+
+```bash
+tmux ls                     # 现在有哪些会话
+tmux attach -t sitl         # 连上去看（看完按 Ctrl-b 再按 d 脱离，不是退出）
+tmux kill-session -t web    # 干掉某一个
+tmux kill-server            # 全干掉
+```
+
+`Ctrl-b` 是前缀键：`Ctrl-b` `d` = 脱离（最常用）、`Ctrl-b` `[` = 滚动翻历史输出。
+
+**为什么不用 `nohup`**：nohup 能活但**看不见输出、没法交互**；
+tmux 既能后台存活，又能随时进去看。调试场景下 tmux 更划算。
+
+**排错时最有用的一招**：解锁被拒、仿真起不来时，
+`tmux attach -t sitl` 进去看 PX4 的 `Preflight Fail` 原因 ——
+`fly.sh` 的提示语指的就是这个。
+
 ---
 
 ## 3. 逐函数清单（带参数）
