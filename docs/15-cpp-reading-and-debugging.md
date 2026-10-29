@@ -331,18 +331,92 @@ void serveWebSocket(beast::tcp_stream stream,
                     uint64_t client_id);
 ```
 
-**按 JSON 消息类型切块读**，一块一块看：
+**一个浏览器标签 = 一条 TCP 连接 = 一个线程 = 这个函数从头跑到尾。** 函数返回，连接就结束了。
+整体是「开场五步 → 起一个推送线程 → 死循环读帧分发 → 收尾」。
 
-| `type` 字段 | 行号 | 作用 |
+**开场五步**
+
+| 行 | 代码 | 作用 |
+|---|---|---|
+| 31 | `websocket::stream<beast::tcp_stream> ws(std::move(stream));` | 把 HTTP 的流包成 WebSocket 流 |
+| 34 | `ws.set_option(timeout::suggested(beast::role_type::server));` | **必须设**：拔网线时对端不发 FIN，`read` 会永远阻塞，线程就废了 |
+| 37 | `ws.accept(req);` | 握手：校验请求头 + 回 `101 Switching Protocols` |
+| 40 | `ws.text(true);` | **必须设**：不设默认发二进制帧，浏览器收到 `Blob`，前端 `JSON.parse` 直接失败 |
+| 42 | `state.attachClient(client_id);` | 报到：从此刻起 `any_client = true` → 50 Hz 定时器那边 `msg.valid` 才为 true → PX4 认为有遥控 |
+
+**为什么必须有 `write_mu` 这把锁**（第 49-66 行）
+
+Beast 同步流的规则：同一条连接允许「1 个读 + 1 个写」并发，**绝不能「2 个写」并发**。
+而这里有两个写者：
+
+1. 主循环里回 `ack`
+2. `pusher` 线程每 100 ms 推一次遥测
+
+两个写者同时往同一个 socket 写，帧会交错，浏览器解析直接崩。
+所以**所有写统一走 `send_text` lambda**，由这把锁串行化 —— 这是"唯一出口"模式。
+
+**为什么 `pusher` 要单独开线程**（第 62-68 行）
+
+主循环卡在 `ws.read()` 上等客户端发数据。如果遥测也放在主循环里发，
+客户端不打杆时读循环就阻塞着，网页上的高度/模式会全冻住。
+所以遥测用独立线程主动推，10 Hz，与客户端是否发帧无关。
+
+**主循环：读一帧 → 解析 → 分发**（第 71-200 行）
+
+```cpp
+for (;;) {
+    beast::flat_buffer buffer;   // 每轮新建，天然没有上一帧残留
+    beast::error_code ec;
+    ws.read(buffer, ec);         // 用 error_code 重载：断开时返回错误码而不是抛异常
+    if (ec) break;               // 客户端断开/超时，正常收场
+    ...解析 JSON（解析失败就跳过，不崩）...
+}
+```
+
+消息分发（`type` 字段）：
+
+| `type` | 行号 | 作用 |
 |---|---|---|
 | `sticks` | 107 | 更新摇杆，**`deadman` 是这条消息里的一个字段**（不是独立消息） |
 | `disarm` | 114 | `sendCommand(..., 400, 0.0F)` 上锁 |
-| `mode` | 125 | `mainModeOf(name)` → `DO_SET_MODE`；返回 0 则报"未知模式" |
+| `mode` | 125 | `mainModeOf(name)` → `DO_SET_MODE`；返回 0 则回 `ok:false` 报"未知模式" |
 | `arm` / `takeoff` | 147 | **两个 type 共用一个分支**，靠 `want_takeoff` 区分是否接着起飞 |
 | `land` | 183 | `sendCommand(..., 21)` |
-| `kill` | 191 | 上锁 + `FLIGHT_TERMINATION` |
+| `kill` | 191 | 上锁 + `FLIGHT_TERMINATION`，同时把杆量置成"松开" |
 
 回给前端的 `ack` 不是客户端发来的消息，是服务端下发的结果回执（前端靠 `type=="ack"` 在右下角打印）。
+
+**分发里的三个坑**（都是踩出来的）
+
+1. **非 `sticks` 帧绝不能动摇杆**（第 107 行的 `if` 就是干这个的）
+   `arm`/`mode`/`takeoff` 这些消息**没有 `deadman` 字段**，若不管类型一律调 `setSticks`，
+   `root.get("deadman", false)` 会取到 `false` —— **等于把使能松开了**，解锁必然被拒。
+
+2. **命令类消息先查 ROS 链路通不通**（第 94 行）
+   `state.statusAgeSec() > 1.5` 表示 1.5 s 没收到遥测，说明 `/fmu/*` 根本没通
+   （典型原因：忘了起 `MicroXRCEAgent`）。这时发命令是石沉大海，
+   用户看到的是「点了 ARM 毫无反应」。所以这里主动回 `ok:false` 并说明原因，然后 `continue`。
+
+3. **`arm`/`takeoff` 不因"没按使能"而拒绝，而且必须开线程**（第 147-181 行）
+   - 旧逻辑是没按使能就回 `deadman not held`，用户点了起飞毫无反应。
+     实际上 PX4 解锁只要求「有有效遥控信号 + 油门在最低」，所以这里干脆
+     **替用户把杆量摆成"回中 + 油门最低"**，既满足条件又不会带着偏杆起飞。
+   - 反过来，**按着使能却把油门推上去时直接拒**（`throttle must be at minimum`），
+     否则一解锁飞机就蹿起来。
+   - `takeoffSequence` 内部是**阻塞**的（解锁失败重试 8 次 × 1.5 s ≈ 12 s），
+     直接调会堵死读循环，所以 `std::thread(...).detach()` 扔出去。
+
+**收尾**（第 205-210 行）
+
+```cpp
+alive = false;                      // 告诉 pusher 别推了
+if (pusher.joinable()) pusher.join();   // 等它退出（最多等 100 ms 的 sleep）
+state.releaseClient(client_id);     // any_client 变 false → 网页后端主动释放租约 → 终端守护接手
+```
+
+**一个值得知道的设计后果**：`armSequence`/`takeoffSequence` 是 `detach()` 出去的，
+参数都是 `main` 里的对象，所以**点了起飞马上关网页，飞机照样会起飞**。
+作为"命令已下发"是合理的，但从安全角度"操作的人走了命令还在跑"值得留意。
 
 ### 3.5 第五层：装配
 
