@@ -172,11 +172,88 @@ int navState() const;
 double obstacleDistance() const;
 ```
 
-**读这个文件只问三个问题**：
+**字段按锁分两拨，这是这个文件的第一层结构**
 
-1. 哪些字段有锁？`mutex_` 管控制/连接，`telemetry_mutex_` 管遥测，**两把锁不嵌套**（避免死锁）
-2. getter 返回的是快照还是引用？**全是值/快照** —— 这是它能安全跨线程的原因
-3. 哪些是"派生"的？`valid`、`any_client` 是算出来的，不是存下来的
+| 锁 | 保护的字段 | 谁来写 | 谁来读 | 频率 |
+|---|---|---|---|---|
+| `mutex_`（控制链） | `client_` `attached_` `deadman_` `roll_` `pitch_` `yaw_` `throttle_stick_` `last_update_` | `setSticks` / `attachClient` / `releaseClient`（WS 线程） | `control()`（50 Hz 定时器） | 50 Hz 写 + 50 Hz 读 |
+| `telemetry_mutex_`（遥测链） | `armed_` `nav_state_` `last_status_` `z_valid_` `z_` `ref_alt_` `voltage_v_` `battery_pct_` `obstacle_m_` `last_obstacle_` | `setStatus` / `setPosition` / `setBattery` / `setObstacle`（ROS 回调） | `getTelemetryFor()`（10 Hz 推送）、`armed()` 等 | 回调频率 + 10 Hz |
+
+**为什么要拆两把锁**：控制链是 20 ms 一次的高频活，遥测链是 10 Hz。
+合成一把锁的话，50 Hz 的 `control()` 会和每次遥测写入互相排队，
+在 CPU 吃紧时可能拖慢杆量下发 —— 而杆量下发是安全相关的。
+
+**关键不变量：两把锁从不嵌套。**
+
+看 `getTelemetryFor()` —— 它需要两边数据，但用的是**两个独立作用域**：
+
+```cpp
+Json::Value root(Json::objectValue);
+{
+    std::lock_guard<std::mutex> lock(telemetry_mutex_);   // 先遥测
+    ...
+}                                                          // ← 先释放
+{
+    std::lock_guard<std::mutex> lock(mutex_);              // 再控制
+    ...
+}                                                          // ← 再释放
+```
+
+不是"持着 A 去抢 B"。代码注释也点明了这个前提：
+`// 两把锁分开取，永不嵌套反序（别处没有先 control 后 telemetry 的路径）`。
+**只要没有任何路径嵌套，就不可能出现死锁。**
+
+**读这个文件只问四个问题**
+
+1. 这个字段归哪把锁管？（见上面的表）
+2. getter 返回的是快照还是引用？**全是值** —— 这是它能安全跨线程的根本原因
+3. 哪些是"派生"的？`valid = deadman_ && age < 0.3`、`any_client = !attached_.empty()`
+   都是**算出来的**，不是存下来的（存下来就得同步两份，容易忘）
+4. 有没有在锁里干活？`getTelemetryFor` 在锁里构造 `Json::Value`，属于轻度活，可以接受；
+   但别在锁里发 DDS、别在锁里做文件 IO
+
+**`setSticks` 里那条"旁观者不能抢控制权"的规则**（最容易被忽略的一段）
+
+```cpp
+if (client_ != client && !deadman) {
+    return;                    // 别的连接发来的、又没按使能 → 直接丢弃
+}
+client_ = client;              // 按了使能 → 才算接管
+```
+
+场景：你开着两个标签页，A 在飞，B 只是"看"。
+B 的页面也在每 20 ms 发一帧 `deadman=false` 的摇杆——那是它页面自己在跑。
+如果没有上面那个 `if`，B 的帧会把 `client_` 改成 B，HUD 上的"操控者"就来回跳，
+A 甚至可能因为 owner 变了而被判失效。
+
+加上这个 `if` 之后：旁观者怎么发都进不来；但只要它**按下使能**，
+就会立刻接管（`client_ = client`）—— 这是有意的"抢控制权"通道。
+
+**实测这张规则表**（两标签 A/B 都连着，用 `getTelemetryFor()` 的 `controller` 字段观察 owner）：
+
+| 动作 | `valid` | `any_client` | A 看到的 | B 看到的 |
+|---|---|---|---|---|
+| 都连上，没人按使能 | 0 | 1 | none | none |
+| A 按下使能 | 1 | 1 | **you** | other |
+| B 发 `deadman=false` 的帧 | 1 | 1 | **you** | other |
+| B 按下使能 | 1 | 1 | other | **you** |
+| A 松杆（已不是 owner） | 1 | 1 | other | **you** |
+| B 断线 | 0 | 1 | none | none |
+
+两处值得注意：
+
+- 第 3 行证明了旁观者的帧确实进不来；第 4 行证明按下使能就能抢。
+- 最后一行：**断线会把控制权清零，而不是转交给另一个还连着的标签**。
+  `releaseClient` 里是 `client_ = 0; deadman_ = false;`，所以 A 必须重新按一下使能才能接管。
+  这是偏保守的选择 —— 不会让"没在操作的人"突然变成操控者。
+
+**数据口径的三个坑**
+
+| 字段 | 坑 |
+|---|---|
+| `z_` | NED 坐标，**向下为正**。所以高度是 `-z_`（见 `root["alt"] = z_valid_ ? -z_ : 0.0`） |
+| `ref_alt_` | AMSL 基准。起飞要给 `ref_alt_ + 相对高度`，且 NED 下是 `ref_alt_ - z_ + relative_m`；拿不到 `ref_alt_` 时退化成相对高度 |
+| `-1` | `obstacle_m_` 和 `battery_pct_` 都用 **-1 表示"未知"**（前端据此显示 `--`）。障碍还带 2 s 过期：没感知在跑时读出来也是 -1 |
 
 #### `src/flight_ui_cpp/src/control_lease.cpp`（92 行）
 
