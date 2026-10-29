@@ -159,11 +159,34 @@ tmux new-session -d -s stick "python3 scripts/stick_keeper.py > /tmp/stick_keepe
 本项目脚本里实际出现的会话名（`grep` 自 `scripts/*.sh`）：
 `agent` `sitl` `web` `stick` `cams` `gzgui` `show` `depthbridge`。
 
-四个日常命令：
+**`tmux ls` 只告诉你"有哪些会话"，看不到里面在干什么。** 想看内容有三条路：
 
 ```bash
-tmux ls                     # 现在有哪些会话
-tmux attach -t sitl         # 连上去看（看完按 Ctrl-b 再按 d 脱离，不是退出）
+# ① 连进去（交互式，能敲命令）
+tmux attach -t sitl         # 看完按 Ctrl-b 再按 d 脱离 —— 是"脱离"不是"退出"
+
+# ② 不进去，读它屏幕上的内容（脚本里最好用）
+tmux capture-pane -pt sitl          # 当前屏
+tmux capture-pane -pt sitl -S -200   # 往上翻 200 行历史
+
+# ③ 直接读重定向的日志文件（本项目最常用）
+tail -f /tmp/flight_sitl.log
+```
+
+> `-p` = 输出到 stdout（不进入），`-t` = 目标会话，`-S -200` = 从历史第 200 行开始。
+> 因为 `fly.sh` 起服务时都写了 `> /tmp/xxx.log 2>&1`，所以**多数情况下 `tail -f` 比 attach 方便** ——
+> 不占终端、能配合 `grep`、不会因为误按 Ctrl-C 把服务停掉。
+
+`tmux ls` 的实际输出长这样（没有会话时会提示 `no server running`）：
+
+```
+sitl: 1 windows (created Thu Oct 29 19:53:13 2026)
+web:  1 windows (created Oct 29 20:15:31 2026)
+```
+
+其余管理命令：
+
+```bash
 tmux kill-session -t web    # 干掉某一个
 tmux kill-server            # 全干掉
 ```
