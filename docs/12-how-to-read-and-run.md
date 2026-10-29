@@ -14,32 +14,36 @@
 | 后端 | 语言 | 位置 | 用途 |
 |---|---|---|---|
 | Python 版 | FastAPI + uvicorn | `src/flight_ui/flight_ui/` | 最初跑通的版本，**用来对照读** |
-| C++ 版 | rclcpp + Boost.Beast | `src/flight_ui_cpp/` | 当前主力，6 个编译单元 |
+| C++ 版 | rclcpp + Boost.Beast | `src/flight_ui_cpp/` | 当前主力，8 个编译单元 |
 | 参考实现 | rclcpp，多文件 | 只在 git 历史 `a18ed7d` 里 | 不想看的话可以无视 |
 
 ### 主干文件
 
 ```
-src/flight_ui/web/            ← 前端（370 行，先读这个）
-├── app.js        200 行      双摇杆 / WebSocket / 协议
-├── index.html     43 行      骨架
+src/flight_ui/web/            ← 前端（376 行，先读这个）
+├── app.js        204 行      双摇杆 / WebSocket / 协议
+├── index.html     45 行      骨架
 └── style.css     127 行      样式
 
-src/flight_ui_cpp/            ← C++ 后端（一个文件一件事）
+src/flight_ui_cpp/            ← C++ 后端（1246 行 / 8 个编译单元 + 1 个 header-only 状态类）
 ├── include/flight_ui_cpp/
-│   ├── shared_state.hpp   187 行  跨线程状态 + 两把锁 + 控制权租约
-│   ├── mode_tables.hpp        模式名 ↔ 编号（两张表）
-│   ├── command_sequence.hpp   解锁/起飞/降落时序
-│   ├── http_util.hpp      json/读文件/MIME
-│   ├── ws_session.hpp     WebSocket 会话
-│   └── http_server.hpp    HTTP 连接分发
+│   ├── shared_state.hpp   218 行  跨线程状态 + 两把锁（控制 / 遥测）
+│   ├── control_lease.hpp   39 行  控制权租约（网页 vs 终端摇杆守护）
+│   ├── command_sequence.hpp 30 行 解锁/切模式/起飞/降落时序
+│   ├── ws_session.hpp      28 行  WebSocket 会话
+│   ├── config.hpp          20 行  YAML 参数
+│   ├── http_server.hpp     15 行  HTTP 连接分发
+│   ├── mode_tables.hpp     10 行  模式名 ↔ 编号（两张表）
+│   └── http_util.hpp        9 行  json/读文件/MIME
 └── src/
-    ├── main.cpp          159 行  装配 + 订阅 + 定时器 + accept 线程
-    ├── mode_tables.cpp    39 行
-    ├── command_sequence.cpp 122 行
-    ├── http_util.cpp      37 行
-    ├── ws_session.cpp    205 行  主循环：读一帧 → 改状态/发命令 → 回 ack
-    └── http_server.cpp    98 行
+    ├── main.cpp          216 行  装配 + 订阅 + 50 Hz 杆量定时器 + HTTP accept
+    ├── ws_session.cpp    212 行  主循环：读一帧 → 改状态/发命令 → 回 ack
+    ├── command_sequence.cpp 132 行  发 PX4 命令 + 阻塞重试
+    ├── http_server.cpp   104 行  每连接一线程，先读 HTTP 头
+    ├── control_lease.cpp  92 行  租约读写（/tmp/flight_control.lease）
+    ├── mode_tables.cpp    43 行
+    ├── http_util.cpp      41 行
+    └── config.cpp         37 行  读 config/flight_ui.yaml
 
 src/flight_perception_cpp/    ← C++ 感知（两个可执行，合计 193 行）
 ├── src/min_depth.cpp       92 行  32FC1 深度图中央 ROI 最小距离 → /obstacle_distance
@@ -66,10 +70,10 @@ scripts/                      ← 运维脚本
 
 | 行 | 看什么 |
 |---|---|
-| 88–98 | `sendSticks()`：每帧发什么字段 |
-| 176 | `setInterval(sendSticks, 20)`：50 Hz 上行 |
+| 90–100 | `sendSticks()`：每帧发什么字段 |
+| 202 | `setInterval(sendSticks, 20)`：50 Hz 上行 |
 | 129–135 | 按钮绑定：每个按钮发什么 `type` |
-| 141–150 | `updateTelemetry()`：HUD 只读 `armed / mode / alt / battery` |
+| 154–170 | `updateTelemetry(t)`：HUD 只读 `armed / mode / alt / battery` |
 
 **为什么先读这个**：整条链路就是「JSON 进 → ROS 消息出」。把协议搞明白，
 后端代码只是"收到这个 JSON 该干什么"的映射表。

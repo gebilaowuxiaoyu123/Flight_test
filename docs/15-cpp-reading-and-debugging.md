@@ -108,12 +108,13 @@ readelf -S build/flight_ui_cpp/rc_server | grep -c debug_info   # 应 ≥ 1
 #### `src/flight_ui_cpp/src/mode_tables.cpp`（43 行）
 
 ```cpp
-std::string modeNameOf(int nav_state);       // 18 种 nav_state → 名字（只读回显用）
+std::string modeNameOf(int nav_state);       // 18 个显式分支 → 名字（只读回显用）
 int mainModeOf(const std::string & name);    // 名字 → 主模式号 1~7（发命令用）
 ```
 
 - `nav_state`：PX4 `vehicle_status.nav_state` 原值，如 `POSCTL=2`、`AUTO_TAKEOFF=17`、`AUTO_LAND=18`
-- ⚠️ **这两个不是反函数**：`modeNameOf` 认 18 种取值，`mainModeOf` 只输出主模式号。两套编号不能互套。
+- 未列出的取值落到 `default` → `STATE_<n>`，所以不会返回空串
+- ⚠️ **这两个不是反函数**：`modeNameOf` 有 18 个显式分支，`mainModeOf` 只输出主模式号。两套编号不能互套。
 
 #### `src/flight_ui_cpp/src/http_util.cpp`（41 行）
 
@@ -262,14 +263,16 @@ void serveWebSocket(beast::tcp_stream stream,
 
 **按 JSON 消息类型切块读**，一块一块看：
 
-| `type` 字段 | 作用 |
-|---|---|
-| `sticks` | 更新摇杆 + deadman，写进 `SharedState` |
-| `arm` / `disarm` | 调 `armSequence` |
-| `mode` | 调 `mainModeOf` + `DO_SET_MODE` |
-| `takeoff` | 调 `takeoffSequence` |
-| `land` | 调 `landNow` |
-| `kill` | 调 `killNow` |
+| `type` 字段 | 行号 | 作用 |
+|---|---|---|
+| `sticks` | 107 | 更新摇杆，**`deadman` 是这条消息里的一个字段**（不是独立消息） |
+| `disarm` | 114 | `sendCommand(..., 400, 0.0F)` 上锁 |
+| `mode` | 125 | `mainModeOf(name)` → `DO_SET_MODE`；返回 0 则报"未知模式" |
+| `arm` / `takeoff` | 147 | **两个 type 共用一个分支**，靠 `want_takeoff` 区分是否接着起飞 |
+| `land` | 183 | `sendCommand(..., 21)` |
+| `kill` | 191 | 上锁 + `FLIGHT_TERMINATION` |
+
+回给前端的 `ack` 不是客户端发来的消息，是服务端下发的结果回执（前端靠 `type=="ack"` 在右下角打印）。
 
 ### 3.5 第五层：装配
 
@@ -288,9 +291,9 @@ int main(int argc, char ** argv);
 
 50 Hz 定时器分三段，建议按这个顺序读：
 
-1. `main.cpp:121-147` 租约协商（0.5 s 节流、边沿日志、抢不到就 `return`）
-2. `main.cpp:152-160` 四通道映射与兜底（`has_pilot` vs `c.valid` 的区别见 5.1）
-3. `main.cpp:162-173` 填 PX4 消息字段并 `publish`
+1. `main.cpp:121-145` 租约协商（0.5 s 节流、边沿日志、抢不到就 `return`）
+2. `main.cpp:147-156` 四通道映射与兜底（`has_pilot` vs `c.valid` 的区别见 5.1）
+3. `main.cpp:158-171` 填 PX4 消息字段并 `publish`
 
 ### 3.6 感知包
 
@@ -392,11 +395,18 @@ RCLCPP_WARN(node->get_logger(), "杆量无效 age=%.2f", age);
 ```bash
 ros2 topic echo /fmu/in/manual_control_input --once   # 看自己发的杆量
 ros2 topic hz   /fmu/in/manual_control_input          # 应为 50 Hz
-ros2 topic echo /fmu/out/vehicle_status --once        # armed / nav_state
+ros2 topic echo /fmu/out/vehicle_status_v1 --once     # armed / nav_state
 rqt_graph                                             # 看节点连了什么
 curl -s localhost:8000/health                         # 后端活着吗
 cat /tmp/flight_control.lease                         # 控制权现场
 ```
+
+⚠️ 两个必须记住的点：
+
+1. **状态话题带 `_v1` 后缀**：`VehicleStatus` 的 `MESSAGE_VERSION=1`，实际话题是
+   `/fmu/out/vehicle_status_v1`。写成 `/fmu/out/vehicle_status` 收不到任何数据。
+2. **PX4 用的是 best_effort QoS**，`ros2 topic echo` 默认 reliable 可能一条都收不到，
+   卡住就加 `--qos-reliability best_effort`。
 
 ### 4.5 纯函数直接单测（不用起仿真）
 
@@ -505,7 +515,7 @@ Day 3：main.cpp（当目录读），然后开 gdb 断在 50 Hz 定时器上，
 3. 把 50 Hz 改成 20 Hz（改 `config/flight_ui.yaml` 的 `control_rate_hz`），用 `ros2 topic hz` 验证
 4. 用 4.5 的方法给 `modeNameOf` 写个单测，把 18 个 nav_state 全打出来
 5. 把 `takeoffSequence` 里的 `sendCommand(..., 176, 1.0F, 3.0F)` 改成 `1.0F, 1.0F`（p2 变成 MANUAL），
-   观察飞机切到了哪个模式（`ros2 topic echo /fmu/out/vehicle_status --once` 看 `nav_state`）
+   观察飞机切到了哪个模式（`ros2 topic echo /fmu/out/vehicle_status_v1 --once` 看 `nav_state`）
 6. 开两个浏览器标签，观察 `SharedState::attached_` 里有两个元素、`client_` 只有一个
 
 ---
@@ -529,7 +539,7 @@ gdb -q --args build/flight_ui_cpp/rc_server
 
 # 观察话题
 ros2 topic hz   /fmu/in/manual_control_input
-ros2 topic echo /fmu/out/vehicle_status --once
+ros2 topic echo /fmu/out/vehicle_status_v1 --once
 ```
 
 ---

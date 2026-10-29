@@ -142,7 +142,13 @@ fly spin 2          # 左转 2 秒
 fly land            # 降落并上锁（用 PX4 的 NAV_LAND，低空 force disarm 兜底）
 ```
 
-全部子命令：`mode` `arm` `takeoff` `up` `down` `fwd` `back` `left` `right` `spin` `land` `status` `watch` `start` `stop`
+全部子命令按用途分三组：
+
+| 分组 | 子命令 |
+|---|---|
+| 飞行动作 | `mode` `arm` `takeoff` `up` `down` `fwd` `back` `left` `right` `spin` `land` |
+| 状态与运维 | `status` `watch` `start` `stop` `clean` `gui` `logs` |
+| 一键服务 | `link` `sim` `remote` `views` `perc` `record` |
 
 不写秒数默认 2 秒。`takeoff` 默认爬到 1.2 m，可以写 `takeoff 2.0`。
 

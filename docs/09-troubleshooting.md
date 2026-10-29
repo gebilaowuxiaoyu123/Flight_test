@@ -188,7 +188,7 @@ uxrce_dds_client start -t udp -p 8888
 QoS 不匹配：
 
 ```bash
-ros2 topic echo /fmu/out/vehicle_status --once --qos-reliability best_effort
+ros2 topic echo /fmu/out/vehicle_status_v1 --once --qos-reliability best_effort
 ```
 
 ### 消息类型/字段对不上
