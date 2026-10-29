@@ -736,6 +736,68 @@ int main(int argc, char ** argv);
 2. `main.cpp:147-156` 四通道映射与兜底（`has_pilot` vs `c.valid` 的区别见 5.1）
 3. `main.cpp:158-171` 填 PX4 消息字段并 `publish`
 
+**但 `main()` 里还有一处必须读懂：四个订阅（`main.cpp:59-85`）**
+
+它们只做一件事 —— **把 PX4 的遥测搬进 `SharedState`**，每个回调只有一两行：
+
+| 行 | 话题 | 消息类型 | 搬进哪里 | 关键字段处理 |
+|---|---|---|---|---|
+| 59 | `/fmu/out/vehicle_status_v1` | `VehicleStatus` | `state.setStatus()` | `arming_state == 2` → armed（`1=DISARMED, 2=ARMED`）；`nav_state` 原样存 |
+| 66 | `/fmu/out/vehicle_local_position` | `VehicleLocalPosition` | `state.setPosition()` | `z_valid`（是否可信）、`z`（**NED，向下为正**）、`ref_alt`（AMSL 基准） |
+| 72 | `/fmu/out/battery_status` | `BatteryStatus` | `state.setBattery()` | `voltage_v`；`remaining` 是 1→0，**-1 表示未知** |
+| 80 | `/obstacle_distance` | `std_msgs/Float32` | `state.setObstacle()` | 来自本项目感知包，不是 PX4 |
+
+**为什么订阅用 `best_effort`（`main.cpp:47`）**
+
+```cpp
+const auto qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort();
+```
+
+PX4 通过 uXRCE-DDS 发布的话题是 **best_effort**。DDS 的 QoS 兼容规则是
+「**可靠的订阅者不能从 best_effort 的发布者收数据**」—— 所以这里写 `reliable()`
+的话，四个订阅会**一条都收不到**，而且不会报错，只是静默没数据。
+
+配合 4.4 里那条：`ros2 topic echo` 默认 reliable，也要加
+`--qos-reliability best_effort` 才能看到数据。
+
+**实测这条规则**（同一个 best_effort 发布者，两个订阅者各发 194 条）：
+
+```
+发布者 QOS = BEST_EFFORT，共发 194 条
+  reliable    订阅者收到:   0 条
+  best_effort 订阅者收到: 193 条
+```
+
+同时 rclpy 会打一条警告，**这就是"订阅了没数据"时该去日志里找的话**：
+
+```
+[WARN] [qos_sub]: New publisher discovered on topic '/qos_probe',
+offering incompatible QoS. No messages will be received from it.
+Last incompatible policy: RELIABILITY
+```
+
+看到 `incompatible QoS ... Last incompatible policy: RELIABILITY`，
+就说明订阅端写成了 reliable，改成 best_effort 即可。
+
+**唯一一个用 `reliable` 的订阅是 `/obstacle_distance`（`main.cpp:80`）**
+
+```cpp
+create_subscription<std_msgs::msg::Float32>(
+    "/obstacle_distance", rclcpp::QoS(rclcpp::KeepLast(1)).reliable(), ...)
+```
+
+因为它的发布者 `min_depth.cpp` 是本项目的节点，用的是默认 QoS（reliable）。
+**订阅两端 QoS 必须匹配** —— 这条能收到，而 PX4 那三条不能改成 reliable，
+原因就在这里。
+
+**两个容易忽略的细节**
+
+1. **订阅对象必须活到 main 结束**。它们存在局部变量 `status_sub` / `pos_sub` / …
+   里，函数返回时析构。若写成临时对象，订阅会被立刻销毁、再也收不到数据 ——
+   这是 ROS 2 新手最常踩的坑之一。
+2. **`obstacle_m` 默认是 -1**（"没有数据"），所以没跑感知包时 HUD 显示 `--`，
+   不是显示 0。这个 `-1` 约定见 5.x 数据口径那节。
+
 ### 3.5b 三个小文件（先啃掉，建立信心）
 
 #### `src/flight_ui_cpp/src/mode_tables.cpp`（43 行）
