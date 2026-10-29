@@ -484,6 +484,73 @@ TAKEOFF 到达时模式还没切过去，被丢弃。所以中间必须留时间
 
 ### 3.4 第四层：IO 外壳
 
+#### `main.cpp:174-216` 的 socket 引导（读 `http_server.cpp` 的前置）
+
+这段是**裸 POSIX socket**，不经过 Beast。它的作用是"开一个门，等人来敲"：
+
+```cpp
+const int listen_fd = ::socket(AF_INET, SOCK_STREAM, 0);          // ① 造一个 TCP socket
+int yes = 1;
+::setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));  // ② 允许立刻重用端口
+
+sockaddr_in addr{};                        // ③ 全零初始化（必须）
+addr.sin_family      = AF_INET;            //    IPv4
+addr.sin_port        = htons(port);        //    网络字节序
+addr.sin_addr.s_addr = INADDR_ANY;         //    所有网卡都听
+if (::bind(listen_fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0) {
+    RCLCPP_FATAL(logger, "bind(:%d) 失败，端口被调用？", port);   // ④ 端口被占 → 直接退出
+    rclcpp::shutdown(); return 1;
+}
+::listen(listen_fd, 16);                   // ⑤ 进入监听，backlog 16
+```
+
+| 步骤 | 要点 |
+|---|---|
+| ① `::socket(AF_INET, SOCK_STREAM, 0)` | 开头的 `::` 表示调用**全局**的同名函数（不是类成员）。`AF_INET`=IPv4、`SOCK_STREAM`=**TCP**、第三个参数 0 = 用默认协议。返回的 `listen_fd` 是个整数句柄 |
+| ② `SO_REUSEADDR` | **很实用**：上次进程退出后，那条连接会在内核里留 `TIME_WAIT` 约 60 秒，没有这个选项重启会报 `Address already in use`。加上之后可以立刻重新 bind |
+| ③ `sockaddr_in addr{}` | 那个 `{}` 是**值初始化**，把所有字段清零。不写的话 `sin_zero[8]` 那些填充字节是栈上垃圾值，某些系统会 bind 失败 |
+| ③ `htons(port)` | **host to network short**。网络字节序是大端，x86 是小端，所以必须转。忘了写就会连到莫名其妙的端口 |
+| ③ `INADDR_ANY` | 监听**所有网卡**，不只是 `127.0.0.1`。好处是同一局域网的手机也能访问；**代价是同一网络的人都能操控这架飞机** |
+| ④ bind 失败 | 最常见原因就是端口被占（上次的 rc_server 没退干净）。日志里的"端口被调用？"是笔误，实际意思是"端口已被占用" |
+| ⑤ `listen(fd, 16)` | backlog = 16：内核最多帮你在队列里排 16 个"已握手但还没被 accept 的连接"。**`listen` 本身不阻塞**，只是把 socket 标成"接受连接"状态 |
+
+**然后开一个线程循环 `accept`**
+
+```cpp
+std::atomic<bool> running{true};
+std::thread http_thread([&]() {
+    while (running) {
+        const int fd = ::accept(listen_fd, nullptr, nullptr);   // ← 阻塞在这里
+        if (fd < 0) break;
+        std::thread(handleConnection, fd, std::ref(state), web_root,
+                    node.get(), cmd_pub).detach();              // 每连接一个线程
+    }
+});
+```
+
+- **`std::atomic<bool>` 不能省**：`running` 在 main 线程写、在 http 线程读，普通 `bool` 是数据竞争（UB）。
+- **`accept` 是阻塞调用**：没人连进来时线程就停在这一行。所以必须放在独立线程，不能挡着 `rclcpp::spin`。
+- **`std::ref(state)`**：`std::thread` 默认**拷贝**参数，而 `SharedState` 不可拷（含 `std::mutex`）。`std::ref` 传的是引用。
+- **`node.get()`**：`node` 是 `shared_ptr`，`.get()` 取出裸指针传给线程——因为节点生命周期比这些线程长（活到 main 结束）。
+
+**关闭时的顺序很讲究（`main.cpp:207-213`）**
+
+```cpp
+rclcpp::spin(node);                        // 阻塞直到 Ctrl-C
+
+running = false;                            // ① 只改标志，叫不醒 accept！
+::shutdown(listen_fd, SHUT_RDWR);           // ② 这一句才让 accept 立刻返回 -1
+::close(listen_fd);
+if (http_thread.joinable()) http_thread.join();   // ③ 等线程真正退出
+```
+
+**只写 `running = false` 是没用的** —— 因为线程卡在 `accept()` 内部，根本没机会去检查 `running`。
+必须用 `::shutdown(listen_fd, SHUT_RDWR)` 让那个阻塞调用立刻返回错误码，`fd < 0` → `break`。
+
+> 这是个经典范式：**"通知标志" + "打断阻塞调用"**，两者缺一不可。
+> 实测验证：给进程发 SIGINT 后进程干净退出，8000 端口立刻释放
+> （日志里能看到 `signal_handler(SIGINT/SIGTERM)`，说明是 rclcpp 的默认 handler 触发的）。
+
 #### `src/flight_ui_cpp/src/http_server.cpp`（104 行）
 
 ```cpp
