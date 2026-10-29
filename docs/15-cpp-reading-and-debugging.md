@@ -579,7 +579,7 @@ int main(int argc, char ** argv);
 2. `main.cpp:147-156` 四通道映射与兜底（`has_pilot` vs `c.valid` 的区别见 5.1）
 3. `main.cpp:158-171` 填 PX4 消息字段并 `publish`
 
-### 3.6 感知包
+### 3.6 感知包（风格完全不同：没有网络、没有服务，只有「订阅 → 算 → 发布」）
 
 #### `src/flight_perception_cpp/src/min_depth.cpp`（92 行）
 
@@ -588,10 +588,53 @@ class MinDepth : public rclcpp::Node;       // 32FC1 深度图 → 中央 ROI �
 int main(int argc, char ** argv);
 ```
 
-- 订阅 `/depth_camera`（`sensor_msgs/msg/Image`，编码 `32FC1`）
-- 发布 `/obstacle_distance`（`std_msgs/msg/Float32`）
-- **不用 OpenCV**：`32FC1` 就是 float32 数组，按 `step` 逐行索引最快
-- ROI：宽 50%、高 60% 居中；近端盲区 0.2 m 导致恒显示 0.20 m
+**数据流**：`/depth_camera`（`sensor_msgs/msg/Image`，`32FC1`）→ 中央 ROI 取最小 → `/obstacle_distance`（`std_msgs/msg/Float32`）
+
+**四个可调参数**（`declare_parameter`，改的时候不用重新编译）：
+
+```bash
+ros2 run flight_perception_cpp min_depth --ros-args \
+  -p image_topic:=/depth_camera -p max_range:=20.0 \
+  -p roi_width:=0.5 -p roi_height:=0.6
+```
+
+**这段代码的全部难点是「怎么正确索引一个 32FC1 图像」**
+
+```cpp
+const size_t row_len = msg->step / sizeof(float);   // step 是字节数！
+if (row_len < msg->width) return;
+if (msg->data.size() < msg->step * msg->height) return;
+const float * data = reinterpret_cast<const float *>(msg->data.data());
+...
+for (size_t v = y0; v < y0 + rh; ++v) {
+    const float * row = data + v * row_len;         // 按 row_len 走，不是 width
+    for (size_t u = x0; u < x0 + rw; ++u) { const float d = row[u]; ... }
+}
+```
+
+- `step` = **每行字节数**，可能大于 `width * 4`（行尾有对齐填充，padding）。
+  所以必须 `data[v * row_len + u]`；写成 `data[v * width + u]` 在正方形图上凑巧对，
+  换成 641 宽的图就会整体错位。
+- `reinterpret_cast<const float*>` 安全的前提：`32FC1` 就是连续的 float32 数组。
+  这就是"不用 OpenCV"的底气——**不需要解码，`msg->data` 本质上就是 `float[]`**。
+- 两处防御：`row_len < width`（step 小得不可能）和 `data.size() < step*height`（消息被截断）都直接 `return`。
+
+**ROI 与过滤条件**
+
+```cpp
+const size_t rw = std::max<size_t>(1, width * roi_w_);     // 至少 1 像素
+const size_t x0 = (msg->width - rw) / 2;                    // 居中
+...
+if (std::isfinite(d) && d > 0.01F && d < max_range_) { best = std::min(best, d); }
+```
+
+三种值被排除：`NaN`（无数据）、`<= 0.01`（无效）、`>= max_range`（太远不要）。
+若整块 ROI 没有一个有效值 → **直接 return，不发布**。前端因此读到的还是上一次的值，
+超过 2 s 就变成 `-1`（`shared_state::obstacleDistanceLocked` 里判的）。
+
+**于是有个现象要解释清楚**：立体相机有近端盲区（`StereoOV7251` 是 0.2 m），
+飞机停在地面时中央 ROI 里的最近距离恒等于 **0.20 m** —— 那不是 bug，是量程下限。
+HUD 和录制视频里"最近 0.20 m"就是这么来的。
 
 #### `src/flight_perception_cpp/src/optical_flow_logger.cpp`（101 行）
 
@@ -600,9 +643,39 @@ class OpticalFlowLogger : public rclcpp::Node;
 int main(int argc, char ** argv);
 ```
 
-- 订阅 `vehicle_optical_flow` + `vehicle_local_position`
-- 写 CSV 到 `/tmp`，用来验证 `v ≈ ω·h`
-- 和 `flight_ui_cpp` **零耦合**，靠话题通信，可单独起停
+**数据流**：`/fmu/out/vehicle_optical_flow` + `/fmu/out/vehicle_local_position` → CSV（默认 `/tmp/optical_flow_cpp.csv`）
+
+CSV 列：`t,flow_x,flow_y,dt,distance,quality,ekf_vx,ekf_vy,flow_vx,flow_vy`
+
+**核心那三行——它想验证的物理关系 `v ≈ ω · h`**
+
+```cpp
+const double dt = msg->integration_timespan_us * 1e-6;
+flow_vx = flow_x / dt * distance;      // (rad / s) * m = m/s
+```
+
+- `flow_x` 是**积分角度（弧度）**，除以 `dt` 才是角速度（rad/s）
+- 再乘距离 `distance` 就得到等效线速度（m/s）
+- 这正是光流测速的原理：**角速度 × 高度 = 线速度**
+
+> ⚠️ **本项目里 `flow_vx/flow_vy` 这两列会恒为 0**：PX4 的
+> `vehicle_optical_flow.distance_m` 在 SITL 里实测一直是 `NaN`
+>（`ros2 topic echo` 直接显示 `distance_m: .nan`），
+> 而代码里有 `if (dt > 0.0 && std::isfinite(distance))` 的判断。
+> 所以**不是工具坏了**，是缺测距源。要看真实效果得给 PX4 接一个距离传感器。
+
+**为什么两个回调之间要加锁**
+
+`onPosition` 写 `vx_/vy_`，`onFlow` 读它们再写文件。理论上共享了可变状态。
+
+但注意 `main()` 里是 `rclcpp::spin(单节点)`——**默认单线程执行器，回调是串行的**，
+所以严格说今天这个锁不是必需的。它属于**防御性写法**：将来若换成
+`MultiThreadedExecutor`，或者加了 `callback_group`，这把锁就是必要的。
+
+（对比 `shared_state.hpp` 里的两把锁——那里是真的多线程，锁是刚需。）
+
+**和 `flight_ui_cpp` 的关系：零耦合。** 两个节点各自 `main()`，只通过 ROS 话题通信，
+可以单独 `ros2 run` 起停，删掉也不影响后端。
 
 ---
 
