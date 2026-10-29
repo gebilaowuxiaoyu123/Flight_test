@@ -28,6 +28,7 @@
 | [12-how-to-read-and-run.md](12-how-to-read-and-run.md) | **代码怎么看、怎么跑**（读代码顺序 + 命令说明） | ✅ 已完成 |
 | [13-ros-integration-report.md](13-ros-integration-report.md) | **ROS 2 接入说明**（汇报用：证据 + 数据 + 答疑） | ✅ 已完成 |
 | [14-ros-topic-flight.md](14-ros-topic-flight.md) | **终端用 ROS 话题飞飞机**（命令 + 为何不用 OFFBOARD） | ✅ 已完成 |
+| [15-cpp-reading-and-debugging.md](15-cpp-reading-and-debugging.md) | **怎么读 C++ 源码、怎么调试**（读法 + 函数清单 + gdb） | ✅ 已完成 |
 
 > 想直接照做（而不是读原理）？看 [REBUILD.md](../REBUILD.md)：一条命令启动、从零安装、排错决策树、速查表。
 >
