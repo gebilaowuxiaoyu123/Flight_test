@@ -1,7 +1,7 @@
 # 项目进度
 
 当前阶段：**P1–P6 已完成并跑通**（光流 + 深度 + Web 遥控器同机联调）
-最后更新：2026-10-21 20:30
+最后更新：2026-10-30 22:45
 
 > 操作手册（从零安装、排错决策树、速查表）：[REBUILD.md](REBUILD.md)
 
@@ -43,6 +43,80 @@ ros2 run flight_ui ui_server            # http://127.0.0.1:8000/
 - [x] **P5** Web 遥控器：双虚拟摇杆、deadman、ARM/DISARM/POSCTL/TAKEOFF/LAND/KILL
 - [x] **P6** 合并模型 `x500_flow_depth`，光流 + 深度 + 测距同机
 - [ ] **P7** 升级演练（Humble→Jazzy / 新 PX4 / Docker）：见 [docs/08-upgrade.md](docs/08-upgrade.md)
+
+## 本周进展（2026-10-27 二 ~ 10-30 五）
+
+37 个提交，36 个文件改动，+3879 / −898 行。三条主线：**终端工具化 → 修真实 bug → 把 C++ 讲透**。
+
+### 1. 终端命令体系（10-27）
+
+| 提交 | 内容 |
+|---|---|
+| `8db1648` | `flight` 从 alias 改成 shell 函数 —— 之前 `flight start` 会被当成 launch 参数 |
+| `8fef01c` | 修 `source ~/.bashrc` 语法错：老 alias 会在 `flight() {` 之前展开，吃掉函数名。抽出 `scripts/flight_env.sh`，开头先 `unalias` |
+| `379a154` ~ `b4a5cc0` | 四终端控制台 `flight link/sim/remote/views`，`sim` 真开 Gazebo 窗口，`remote` 先起后端再开浏览器 |
+| `fb05cf2` | `flight` / `fly` 的 Tab 补全（`scripts/flight_completion.bash`） |
+
+现在共 24 个子命令，按用途分三组：飞行动作 / 状态运维 / 一键服务。
+
+### 2. 修掉的真实 bug
+
+| 提交 | 现象 | 根因 |
+|---|---|---|
+| `aa5761e` `5ce57c9` | 网页点起飞没反应 | ① 解锁卡在 deadman 上 ② `msg.valid` 填成 deadman → PX4 判遥控丢失 ③ `stick_keeper` 与后端抢同一话题 |
+| `b18dfd5` | 只跑 `flight remote` + `flight sim` 也不飞 | 没起 `MicroXRCEAgent`，`/fmu` 零话题。加 `ensure_agent()` 兜底 + 后端"无遥测拒绝命令" |
+| `396c583` | `flight stop` 把自己所在的 shell 杀掉 | `kill_by_cmd` 的正则没排除 self / PPID |
+| `1f63ed7` | 网页占着控制权时终端打杆"假成功" | 改为直接拒绝并说明原因 |
+| `97757f4` | `flight start` 后飞机自己飞走 1 km | `/tmp/stick.json` 里残留上次杆量，摇杆守护一启动就照发。改为启动前先写回中位 |
+| `bd00d08` | 两端同时写租约文件会解析失败 | C++ 与 Python 共用同一个 `.tmp` 文件名，内容交织。改成带 PID：并发压测 **4000 次 35 次失败 → 0 次** |
+
+### 3. 架构向 RMCS 看齐（10-27 晚）
+
+| 提交 | 内容 |
+|---|---|
+| `82ac955` | `rc_server` 从 800 行单文件拆成 **8 个编译单元**（含 `shared_state.hpp` 与 8 个头文件） |
+| `3ee0f0e` | **控制权租约** `/tmp/flight_control.lease`，web 优先级 10 > terminal 5，两端逻辑对称 |
+| `89b3b2b` | 后端参数外置到 `config/flight_ui.yaml`（5 个参数，改完重启即可） |
+| `e6666a1` `66c2072` | `flight perc` 一条命令起感知节点；`/obstacle_distance` 上 HUD |
+
+### 4. 录制出片（10-28）
+
+| 提交 | 内容 |
+|---|---|
+| `8de9dc4` | **光流 + 深度进录制**：四路画中画（第一视角/俯视/深度/光流），`--sensors depth,flow\|none\|depth\|flow` 终端开关，关掉的那路连相机桥都不建 |
+| `97757f4` | **航迹改画 Gazebo 真值** —— 实测 PX4 无 GPS 时 XY 估计只有真值的 1/3（2.98 m vs 9.18 m，方向还偏 9°） |
+| `9b5ec40` | **视频编码走 GPU**（`h264_nvenc`）：CPU 时间 32.4 s → **4.4 s**，体积基本持平 |
+
+`flight record [none\|depth\|flow]` 现在可选录哪几路；成片 180 s，四路画中画 + 真值航迹。
+
+### 5. 调试环境 + 代码讲解（10-29 ~ 10-30）
+
+| 提交 | 内容 |
+|---|---|
+| `3e1dfd9` | **补调试符号**：原来 `debug_info` 段数为 0，gdb 连断点都下不了。改后 `main.cpp:121` 实测能打印 `c` / `state` / `manual_pub` |
+| `d632146` | 新增 **[docs/15-cpp-reading-and-debugging.md](docs/15-cpp-reading-and-debugging.md)**：三遍读法 + 逐函数参数清单 + 四种调试手段 |
+| `48ae4a3` | 按代码实际状态核对 docs，修掉一批过时事实（6→8 个编译单元、行数全线偏差、`vehicle_status` 少了 `_v1`、`flight` 子命令漏 9 个） |
+
+之后逐个文件讲透（`docs/15` 现在 1920 行）：`control_lease` 的原子替换与租约、
+`http_server` 的 TCP/Beast、`ws_session` 全流程、`shared_state` 的两把锁与 Owner 规则、
+`command_sequence` 的时序与阻塞点、感知包两个节点、`main.cpp` 的四个订阅与 QoS 匹配、
+杆量映射六组合表、`min_depth` 的 ROI 与逐像素扫描、`demo_show.py` 怎么"飞"飞机。
+
+### 本周三个最有价值的发现
+
+| 发现 | 实测数据 |
+|---|---|
+| PX4 无 GPS 时 XY 估计缩水到真值 1/3 | 2.98 m vs 9.18 m，方向偏 9° → 航迹/跟拍必须用 Gazebo 真值 |
+| 视频编码该走 GPU | libx264 32.4 s CPU → h264_nvenc 4.4 s，体积 7.8M vs 8.3M |
+| 租约临时文件名撞车会退化成双发杆量 | 并发压测 4000 次 35 次失败 → 改带 PID 后 0 次 |
+
+### 待办
+
+- [ ] **33+ 个提交还没推到 GitHub**（`origin` = `gebilaowuxiaoyu123/Flight_test`）；
+  本机无 GitHub 凭据（无 `credential.helper`、`~/.ssh` 只有 `known_hosts`、无 `gh`），
+  需在个人终端执行 `git push origin main`（密码填 Personal Access Token）
+- [ ] `.git` 已 ~289 MB（含 4 版成片视频）。推送前可考虑迁到 Git LFS 或只保留最终版
+- [ ] `docs/13` 里的频率数字是 10-21 的测量快照，若要汇报需重跑一次仿真核对
 
 ## 已验收结果（2026-10-21）
 
