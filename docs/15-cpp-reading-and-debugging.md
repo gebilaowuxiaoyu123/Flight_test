@@ -1052,6 +1052,68 @@ if (std::isfinite(d) && d > 0.01F && d < max_range_) { best = std::min(best, d);
 飞机停在地面时中央 ROI 里的最近距离恒等于 **0.20 m** —— 那不是 bug，是量程下限。
 HUD 和录制视频里"最近 0.20 m"就是这么来的。
 
+#### 怎么被调用（三层：launch → 可执行 → 话题）
+
+```
+flight perc
+   └─ ros2 launch flight_perception_cpp perception_cpp.launch.py
+        └─ Node(executable='min_depth', parameters=[{'image_topic': ...}])
+             └─ ros2 run flight_perception_cpp min_depth
+                  └─ 可执行文件：install/flight_perception_cpp/lib/flight_perception_cpp/min_depth
+```
+
+`fly.sh` 的 `perc` 子命令在调 launch 之前，**先检查 `/depth_camera` 有没有人发**：
+
+```bash
+if ! timeout 5 ros2 topic info /depth_camera | grep -qE "Publisher count: [1-9]"; then
+    tmux new-session -d -s depthbridge "... parameter_bridge /depth_camera@sensor_msgs/msg/Image@gz.msgs.Image"
+    sleep 3
+fi
+exec ros2 launch flight_perception_cpp perception_cpp.launch.py
+```
+
+为什么要这样：`gz` 自己也跑 DDS，`ros2 topic list` 里**能看到** `/depth_camera`，
+但可能 `Publisher count: 0`（没人转发）。**判断"有没有数据"必须看 publisher 数，不能只看话题在不在。**
+
+单独跑（不经过 launch）：
+
+```bash
+ros2 run flight_perception_cpp min_depth --ros-args \
+  -p image_topic:=/depth_camera -p roi_width:=0.3 -p max_range:=5.0
+```
+
+> ⚠️ launch 文件只暴露了 `image_topic` 一个参数，`max_range` / `roi_width` /
+> `roi_height` 得用 `ros2 run --ros-args -p` 才改得到。走 launch 又想要这些参数，
+> 得先给 launch 加 `DeclareLaunchArgument`。
+
+#### 实测：五个场景的输出（真跑出来的）
+
+启动 `min_depth`，用合成的 640×480 `32FC1` 图发布到 `/fake_depth`，
+再用可靠订阅者（与 `main.cpp` 同 QoS）读 `/obstacle_distance`：
+
+| 场景 | 期望 | 实收 |
+|---|---|---|
+| ROI 内 2.5 m / ROI 外 0.8 m / 有 NaN 区 | 2.5 | **2.5** ✓ |
+| 近物只在 ROI 外（0.8 m），ROI 内全 15 m | 15.0 | **15.0** ✓（0.8 被忽略） |
+| 全图 25 m（> `max_range`=20） | 无输出 | **0 条** ✓ |
+| 全图 1.0 m | 1.0 | **1.0** ✓ |
+| 全图 0.005 m（< 0.01 下限） | 无输出 | **0 条** ✓ |
+
+**性能**：ROI = 320×288 = 92160 像素，单帧扫描平均 **81.5 µs**（约 12000 帧/秒），
+相机 30 Hz 时占用约 0.24% 单核 —— 直接裸循环完全够用，这也是"不用 OpenCV"的另一个理由。
+
+#### 两个实测踩到的坑（不是代码 bug，但会影响你验证）
+
+1. **`min_depth` 的输出日志被 `RCLCPP_INFO_THROTTLE(..., 500, ...)` 限流**
+   到每秒 2 行。所以"日志里没看到"不等于"没发布" —— 要确认得订阅 `/obstacle_distance`。
+2. **短时间内反复启停发布者时，前面几帧会丢**。
+   `best_effort` + `KeepLast(1)` 本来就不保证送达，DDS 发现也要时间（约 1~3 s）。
+   用合成数据测试时，发布端要**先起、多等几秒、连续发**，否则会误判成"节点没工作"。
+   生产环境里 gz bridge 是 30 Hz 连续发，没有这个问题。
+
+> 补充一个操作经验：把 `min_depth` 用 `./xxx/min_depth > /tmp/x.log 2>&1 &` 的方式
+> 从脚本里起，日志是**块缓冲**的，看起来像"没输出"。放进 tmux 直接跑（`fly.sh` 的做法）
+> 能立刻看到。
 #### `src/flight_perception_cpp/src/optical_flow_logger.cpp`（101 行）
 
 ```cpp
