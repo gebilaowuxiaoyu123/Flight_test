@@ -1314,6 +1314,71 @@ PX4 SITL → Gazebo
 好处是它自动继承了网页那套安全机制（deadman 使能、控制权租约、ack 回执）；
 代价是它和浏览器**会抢控制权**，所以脚本里专门写了"让贤"逻辑（见 3.7.5）。
 
+#### 3.7.0 文件在哪、怎么调用
+
+**位置**：`scripts/demo_show.py`（997 行，43 KB）
+
+**正常路径**不是直接跑它，而是由 `run_show.sh` 调用（`run_show.sh:163`）：
+
+```bash
+flight record                    # = ./scripts/run_show.sh --record
+# run_show.sh 先起 agent / PX4 / gz / rc_server / 五路相机桥 / Xephyr 浏览器，
+# 最后才：
+DISPLAY=:1 python3 -u scripts/demo_show.py \
+    --record artifacts/flight_show_final.mp4 --grab ":1.0+0,0" \
+    --sensors depth,flow --encoder auto
+```
+
+**手动路径**（调参时用）：
+
+```bash
+source /opt/ros/humble/setup.bash && source install/setup.bash
+python3 scripts/demo_show.py --dry-run              # 只飞不录
+python3 scripts/demo_show.py --record /tmp/t.mp4    # 录一条
+python3 scripts/demo_show.py --record /tmp/t.mp4 --frames 20 --sensors none
+```
+
+**七个命令行参数**（`demo_show.py:622` 起）：
+
+| 参数 | 默认 | 作用 |
+|---|---|---|
+| `--record` | 空 | 输出 mp4 路径；不给就只飞不录 |
+| `--dry-run` | — | 不录、不渲染，纯调控制 |
+| `--grab` | `:1.0+0,0` | 抓哪个 X 屏的网页区域（`:1` = Xephyr 虚拟屏） |
+| `--encoder` | `auto` | `auto`/`nvenc`/`x264` |
+| `--duration` | 180 | 秒 |
+| `--sensors` | `depth,flow` | 画中画开关：`none`/`depth`/`flow`/`depth,flow` |
+| `--frames` | 0 | 渲染 N 帧后退出（测试用） |
+
+**配套的四个脚本**（同目录）：
+
+| 文件 | 作用 |
+|---|---|
+| `run_show.sh` | **调用者**：起全部服务，最后传参给 `demo_show.py` |
+| `pose_writer.py` | 写 Gazebo 真值到 `/tmp/cam_target.json`，`demo_show` 读它画航迹 |
+| `cam_follow.py` | 每帧搬跟拍/俯视相机的位姿 |
+| `rerender_panel.py` | **`from demo_show import FPS, PANEL_H, W, Controller, Overlay`** —— 用日志重渲染下半屏，不必重飞 |
+
+> ⚠️ 因为 `rerender_panel.py` 直接 import 了 `demo_show` 的 `Controller` / `Overlay`，
+> **改这两个类的名字或签名会连带影响它**。
+
+**文件内部结构**（997 行）：
+
+| 行范围 | 内容 |
+|---|---|
+| 1-67 | 文件头说明 + import + 字体/常量 |
+| 68-150 | `WSClient` —— 最小 WebSocket 客户端（握手 / 文本帧收发） |
+| 151-205 | `FlightState` —— ROS 侧反馈（位置/姿态/光流） |
+| 206-216 | `CAM_TOPICS` —— 五路相机的话题名表 |
+| 217-233 | `read_true_pose()` —— 读 Gazebo 真值 |
+| 234-307 | `CameraFeed` —— 相机订阅 + 深度伪彩色 |
+| 308-366 | `Controller` —— 串级控制律 |
+| 367-556 | `Overlay` —— 下半屏面板（手柄/姿态仪/航迹/遥测） |
+| 557-581 | `build_mission()` + `figure8()` —— 10 个阶段的任务表 |
+| 588-591 | `_FramesDone` —— 达到 `--frames` 时跳出整场的异常 |
+| 592-619 | `crop_center()` |
+| 620-997 | `main()` —— 装配 + 50 Hz 发送线程 + 主循环 + ffmpeg |
+
 #### 3.7.1 两个线程，各管一件事
 
 | 线程 | 频率 | 干什么 |
