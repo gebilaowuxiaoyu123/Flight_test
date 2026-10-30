@@ -1215,6 +1215,52 @@ int main(int argc, char ** argv);
 
 CSV 列：`t,flow_x,flow_y,dt,distance,quality,ekf_vx,ekf_vy,flow_vx,flow_vy`
 
+**构造函数里那 6 行在干什么（打开文件 + 写表头）**
+
+```cpp
+path_ = declare_parameter<std::string>("csv_path", "/tmp/optical_flow_cpp.csv");
+file_.open(path_, std::ios::out | std::ios::trunc);
+if (file_.is_open()) {
+    file_ << "t,flow_x,flow_y,dt,distance,quality,ekf_vx,ekf_vy,flow_vx,flow_vy\n";
+} else {
+    RCLCPP_ERROR(get_logger(), "cannot open %s", path_.c_str());
+}
+```
+
+| 行 | 作用 |
+|---|---|
+| `declare_parameter` | 输出路径做成 ROS 参数，默认 `/tmp/optical_flow_cpp.csv`，可用 `-p csv_path:=...` 改 |
+| `std::ios::out` | 以**写**方式打开（`ofstream` 默认已含，写出来是明确意图） |
+| `std::ios::trunc` | 打开时**清空已有内容** —— 每次跑都是新的一份，不会和上次混在一起 |
+| `file_ << "t,flow_x,...\n"` | 立刻写表头。文件刚 trunc 完是空的，先写表头能保证"有文件就有表头"，下游读 CSV 不会把第一行数据当表头 |
+| `else RCLCPP_ERROR` | 打不开只**报错、不退出**。节点继续跑（订阅照建），只是再也不写数据 |
+
+**实测这两个行为**：
+
+```
+# 启动前先塞 22 字节脏数据
+启动前: 22 字节
+启动后:  0 字节        ← trunc 生效，旧内容清掉了
+```
+
+```
+# 表头是"延迟落盘"的（ofstream 带缓冲）
+运行中:      0 字节     ← 表头还在缓冲区里
+SIGINT 退出: 66 字节    ← ~OpticalFlowLogger() 里 file_.flush() 才写出去
+           t,flow_x,flow_y,dt,distance,quality,ekf_vx,ekf_vy,flow_vx,flow_vy
+```
+
+**两个由此而来的注意事项**：
+
+1. **数据是攒在缓冲区里的**，只有缓冲区满（通常 4 KB）或进程**优雅退出**
+   （析构里 `file_.flush()`）才真正落盘。所以 `kill -9` 会**丢掉最后一段数据**；
+   想边跑边看，得等缓冲区自然写满。
+2. **打不开文件不会让节点退出**（只 `RCLCPP_ERROR`）。所以 CSV 一直是空的，
+   先确认路径可写，而不是怀疑话题没数据。
+
+> 另外：`trunc` 意味着**上一次的记录会被覆盖**。要留历史得先备份，
+> 或者每次传不同的 `csv_path`。
+
 **核心那三行——它想验证的物理关系 `v ≈ ω · h`**
 
 ```cpp
